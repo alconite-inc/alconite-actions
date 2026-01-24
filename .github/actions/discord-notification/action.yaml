@@ -1,0 +1,44 @@
+name: Alconite Discord Notification
+description: Sends a Discord notification on workflow success or failure.
+
+inputs:
+  webhook-url:
+    description: "Discord webhook URL"
+    required: true
+  release-version:
+    description: "Release version (optional)"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Send Discord notification on success
+      if: ${{ success() }}
+      uses: tsickert/discord-webhook@v7.0.0
+      with:
+        webhook-url: ${{ inputs.webhook-url }}
+        username: "Alconite Bot"
+        avatar-url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+        embed-title: "✅ Published: ${{ github.repository }} ${{ inputs.release-version }}"
+        embed-color: 3066993
+        embed-url: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        embed-description: |
+          **Tag:** `${{ github.ref_name }}`
+          **Actor:** `${{ github.actor }}`
+          **Run:** [View workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+    - name: Send Discord notification on failure
+      if: ${{ failure() }}
+      uses: tsickert/discord-webhook@v7.0.0
+      with:
+        webhook-url: ${{ inputs.webhook-url }}
+        username: "Alconite Bot"
+        avatar-url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+        embed-title: "❌ Publish failed: ${{ github.repository }} ${{ github.ref_name }}"
+        embed-color: 15158332
+        embed-url: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        embed-description: |
+          **Tag:** `${{ github.ref_name }}`
+          **Actor:** `${{ github.actor }}`
+          **Run:** [View workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
