@@ -1,0 +1,61 @@
+name: Alconite Gradle Test Reporting
+description: Generates and publishes test and code coverage reports for Gradle projects.
+
+inputs:
+  github-token:
+    description: "GitHub token for PR comment/checks"
+    required: true
+  jacoco-paths:
+    description: "Glob(s) to JaCoCo XML report(s)"
+    required: false
+    default: "${{ github.workspace }}/**/build/reports/jacoco/test/jacocoTestReport.xml"
+  min-coverage-overall:
+    description: "Minimum overall code coverage percentage"
+    required: false
+    default: "80"
+  coverage-title:
+    description: "Title for the code coverage report"
+    required: false
+    default: "Code Coverage Report"
+  junit-files:
+    description: "Glob(s) to JUnit XML test result files"
+    required: false
+    default: "**/build/test-results/**/*.xml"
+  artifact-name:
+    description: "Name of the uploaded artifact"
+    required: false
+    default: "test-report"
+  artifact-paths:
+    description: "Paths/globs to upload as artifact"
+    required: false
+    default: |
+      **/build/reports/tests/
+      **/build/reports/jacoco/
+
+runs:
+  using: "composite"
+
+  steps:
+    - name: Add Coverage To Pull Request
+      id: codecov
+      if: ${{ github.event_name == 'pull_request' }}
+      uses: madrapps/jacoco-report@v1.7.2
+      with:
+        paths: ${{ inputs.jacoco-paths }}
+        token: ${{ inputs.github-token }}
+        min-coverage-overall: ${{ inputs.min-coverage-overall }}
+        title: ${{ inputs.coverage-title }}
+        update-comment: true
+
+    - name: Publish Test Results
+      if: ${{ always() }}
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      with:
+        files: ${{ inputs.junit-files }}
+
+    - name: Upload Test Report
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v6
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.artifact-paths }}

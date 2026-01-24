@@ -1,0 +1,52 @@
+name: Configure Alconite Gradle + Java
+description: Sets up Temurin Java and (optionally) Gradle caching; ensures Gradle wrapper is executable.
+
+inputs:
+  java-version:
+    description: "Java version to install"
+    required: false
+    default: "25"
+
+  cache:
+    description: "Dependency cache mode for setup-java (gradle|none)"
+    required: false
+    default: "gradle"
+
+  github-actor:
+    description: "GitHub username to authenticate to GitHub Package Registry"
+    required: false
+    default: ${{ github.actor }}
+
+  github-token:
+    description: "Token / PAT with permission to read GitHub packages from alconite-inc/alconite-maven"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Java ${{ inputs.java-version }}
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java-version }}
+        cache: ${{ inputs.cache }}
+
+    - name: Validate Gradle Wrapper
+      uses: gradle/wrapper-validation-action@v3
+
+    - name: Grant execute permission for Gradle Wrapper
+      shell: bash
+      run: chmod +x ./gradlew
+
+    - name: Configure Alconite GitHub Maven Registry
+      shell: bash
+      env:
+        GPR_USER: ${{ inputs.github-actor }}
+        GPR_KEY: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$HOME/.gradle"
+        {
+          echo "gpr.user=$GPR_UER"
+          echo "gpr.key=$GPR_KEY"
+        } >> "$HOME/.gradle/gradle.properties
