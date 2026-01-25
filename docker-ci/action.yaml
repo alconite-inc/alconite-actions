@@ -132,3 +132,6 @@ runs:
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        secrets: |
+          "github_user=${{ github.actor }}"
+          "github_token=${{ inputs.registry-password }}"
