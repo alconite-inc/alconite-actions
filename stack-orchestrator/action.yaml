@@ -210,7 +210,7 @@ runs:
 
     - name: Java CI
       if: ${{ steps.detect.outputs.stack == 'java' }}
-      uses: alconite-inc/alconite-actions/java-ci@v2
+      uses: alconite-inc/alconite-actions/java-ci@v2.3
       with:
         java-version: ${{ inputs.java-version }}
         packages-token: ${{ inputs.packages-token }}
@@ -225,7 +225,7 @@ runs:
 
     - name: Node CI (minimal)
       if: ${{ steps.detect.outputs.stack == 'node' }}
-      uses: alconite-inc/alconite-actions/node-ci@v2
+      uses: alconite-inc/alconite-actions/node-ci@v2.3
       with:
         node-version: ${{ inputs.node-version }}
         packages-token: ${{ inputs.packages-token }}
@@ -237,7 +237,7 @@ runs:
     - name: Docker CI
       id: docker
       if: ${{ inputs.docker == 'true' && (steps.detect.outputs.stack == 'java' || steps.detect.outputs.stack == 'node' || steps.detect.outputs.stack == 'docker') }}
-      uses: alconite-inc/alconite-actions/docker-ci@v2
+      uses: alconite-inc/alconite-actions/docker-ci@v2.3
       with:
         registry: ${{ inputs.registry }}
         image: ${{ inputs.image }}
@@ -252,7 +252,7 @@ runs:
 
     - name: Java Publish
       if: ${{ steps.publishmode.outputs.value == 'true' && steps.detect.outputs.stack == 'java' }}
-      uses: alconite-inc/alconite-actions/java-publish@v2
+      uses: alconite-inc/alconite-actions/java-publish@v2.3
       with:
         build-tool: auto
         gradle-task: ${{ inputs.gradle-publish-task }}
@@ -261,7 +261,7 @@ runs:
 
     - name: Discord Notify
       if: ${{ always() && inputs.discord-webhook != '' }}
-      uses: alconite-inc/alconite-actions/discord-notify@v2
+      uses: alconite-inc/alconite-actions/discord-notify@v2.3
       with:
         webhook-url: ${{ inputs.discord-webhook }}
         release-version: ${{ steps.release.outputs.version }}
