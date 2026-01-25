@@ -14,7 +14,7 @@ runs:
   using: composite
   steps:
     - name: Send Discord notification on success
-      if: ${{ success() }}
+      if: success()
       uses: tsickert/discord-webhook@v7.0.0
       with:
         webhook-url: ${{ inputs.webhook-url }}
@@ -29,7 +29,7 @@ runs:
           **Run:** [View workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
     - name: Send Discord notification on failure
-      if: ${{ failure() }}
+      if: failure()
       uses: tsickert/discord-webhook@v7.0.0
       with:
         webhook-url: ${{ inputs.webhook-url }}
