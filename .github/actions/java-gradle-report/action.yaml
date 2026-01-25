@@ -52,6 +52,7 @@ runs:
       uses: EnricoMi/publish-unit-test-result-action@v2
       with:
         files: ${{ inputs.junit-files }}
+        github_token: '${{ inputs.github-token }}'
 
     - name: Upload Test Report
       if: ${{ always() }}
