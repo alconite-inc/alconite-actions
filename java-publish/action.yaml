@@ -1,0 +1,127 @@
+name: Alconite Java Publish - GitHub Packages
+description: Publishes Gradle or Maven Java artifacts on tag releases (expects vX.Y.Z). Maven uses -Drevision.
+
+inputs:
+  build-tool:
+    description: "Build tool selection (auto|gradle|maven)."
+    required: false
+    default: "auto"
+
+  tag-prefix:
+    description: "Release tag prefix (default 'v'). Expects tags like v1.2.3."
+    required: false
+    default: "v"
+
+  gradle-task:
+    description: "Gradle task(s) for publishing."
+    required: false
+    default: "publish"
+
+  maven-goals:
+    description: "Maven goals for publishing."
+    required: false
+    default: "deploy"
+
+  maven-skip-tests:
+    description: "Skip tests during Maven publish (true|false). CI should have run tests already."
+    required: false
+    default: "true"
+
+  upload-artifact:
+    description: "Upload built jars as an artifact (true|false)."
+    required: false
+    default: "true"
+
+  artifact-name:
+    description: "Artifact name for uploaded built jars."
+    required: false
+    default: "built-artifact"
+
+runs:
+  using: composite
+  steps:
+    - name: Detect build tool
+      id: detect
+      shell: bash
+      run: |
+        set -euo pipefail
+        tool="${{ inputs.build-tool }}"
+        if [[ "$tool" == "gradle" || "$tool" == "maven" ]]; then
+          echo "tool=$tool" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [[ -f "./gradlew" || -f "build.gradle" || -f "build.gradle.kts" ]]; then
+          echo "tool=gradle" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [[ -f "./mvnw" || -f "pom.xml" ]]; then
+          echo "tool=maven" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "::error::Unable to detect build tool. Provide inputs.build-tool=gradle|maven."
+        exit 1
+
+    - name: Gather Release Version
+      shell: bash
+      run: |
+        set -euo pipefail
+        ref="${GITHUB_REF_NAME}"
+        prefix="${{ inputs.tag-prefix }}"
+        if [[ "$ref" != ${prefix}* ]]; then
+          echo "::error::Tag must start with '${prefix}' (got '$ref')"
+          exit 1
+        fi
+        ver="${ref#${prefix}}"
+        if [[ -z "$ver" ]]; then
+          echo "::error::Could not parse version from tag '$ref'"
+          exit 1
+        fi
+        echo "RELEASE_VERSION=$ver" >> "$GITHUB_ENV"
+
+    - name: Verify Gradle credentials exist
+      if: ${{ steps.detect.outputs.tool == 'gradle' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        test -f "$HOME/.gradle/gradle.properties"
+        grep -q '^gpr\.key=' "$HOME/.gradle/gradle.properties"
+
+    - name: Verify Maven settings exist
+      if: ${{ steps.detect.outputs.tool == 'maven' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        test -f "$HOME/.m2/settings.xml"
+
+    - name: Publish to GitHub Packages (Gradle)
+      if: ${{ steps.detect.outputs.tool == 'gradle' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        chmod +x ./gradlew
+        ./gradlew ${{ inputs.gradle-task }} -PreleaseVersion="$RELEASE_VERSION" --no-daemon --stacktrace
+
+    - name: Publish to GitHub Packages (Maven)
+      if: ${{ steps.detect.outputs.tool == 'maven' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        chmod +x ./mvnw
+        args=(-B -ntp -Dstyle.color=always -Drevision="$RELEASE_VERSION")
+        if [[ "${{ inputs.maven-skip-tests }}" == "true" ]]; then
+          args+=(-DskipTests)
+        fi
+        ./mvnw "${args[@]}" ${{ inputs.maven-goals }}
+
+    - name: Upload Created Artifact
+      if: ${{ inputs.upload-artifact == 'true' }}
+      uses: actions/upload-artifact@v6
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          **/build/libs/*.jar
+          **/target/*.jar
+        if-no-files-found: error

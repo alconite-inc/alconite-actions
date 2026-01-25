@@ -1,0 +1,101 @@
+name: Alconite Node CI
+description: Minimal Node CI (expand later for linting/coverage/etc.).
+
+inputs:
+  node-version:
+    description: "Node version to install."
+    required: false
+    default: "20"
+
+  package-manager:
+    description: "Package manager (auto|npm|pnpm|yarn)."
+    required: false
+    default: "auto"
+
+  script:
+    description: "Script to run (e.g. test)."
+    required: false
+    default: "test"
+
+  packages-token:
+    description: "Token for private npm packages (GitHub Packages). Leave empty if not needed."
+    required: false
+    default: ""
+
+  reporting-token:
+    description: "Token for PR checks/comments (usually github.token)."
+    required: false
+    default: ${{ github.token }}
+
+  reporting:
+    description: "Enable unit test result publishing (true|false)."
+    required: false
+    default: "true"
+
+  junit-files:
+    description: "Glob(s) to JUnit XML test result files."
+    required: false
+    default: "**/junit*.xml"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+
+    - name: Configure npm auth (GitHub Packages)
+      if: ${{ inputs.packages-token != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "//npm.pkg.github.com/:_authToken=${{ inputs.packages-token }}" >> ~/.npmrc
+
+    - name: Detect package manager
+      id: pm
+      shell: bash
+      run: |
+        set -euo pipefail
+        pm="${{ inputs.package-manager }}"
+        if [[ "$pm" != "auto" ]]; then
+          echo "value=$pm" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [[ -f "pnpm-lock.yaml" ]]; then echo "value=pnpm" >> "$GITHUB_OUTPUT"; exit 0; fi
+        if [[ -f "yarn.lock" ]]; then echo "value=yarn" >> "$GITHUB_OUTPUT"; exit 0; fi
+        echo "value=npm" >> "$GITHUB_OUTPUT"
+
+    - name: Install + run (npm)
+      if: ${{ steps.pm.outputs.value == 'npm' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        npm ci
+        npm run ${{ inputs.script }}
+
+    - name: Install + run (pnpm)
+      if: ${{ steps.pm.outputs.value == 'pnpm' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        corepack enable
+        pnpm install --frozen-lockfile
+        pnpm run ${{ inputs.script }}
+
+    - name: Install + run (yarn)
+      if: ${{ steps.pm.outputs.value == 'yarn' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        corepack enable
+        yarn install --immutable || yarn install --frozen-lockfile
+        yarn run ${{ inputs.script }}
+
+    - name: Publish Test Results (Node)
+      if: ${{ inputs.reporting == 'true' && always() }}
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      with:
+        files: ${{ inputs.junit-files }}
+        github_token: ${{ inputs.reporting-token }}
