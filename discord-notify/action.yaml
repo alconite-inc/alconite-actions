@@ -12,7 +12,7 @@ inputs:
     default: ""
 
   job-status:
-    description: "Job status from the caller (pass: ${{ job.status }}). Expected: success|failure|cancelled."
+    description: "Job status from the caller. Expected: success|failure|cancelled."
     required: true
 
 runs:

@@ -142,6 +142,11 @@ inputs:
     required: false
     default: ""
 
+  job-status:
+    description: "Job status for Discord notification (success|failure|cancelled)."
+    required: true
+    default: ""
+
 outputs:
   stack:
     description: "Resolved stack type used by orchestrator."
