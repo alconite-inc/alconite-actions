@@ -1,5 +1,5 @@
 name: Alconite Discord Notification
-description: Sends a Discord notification on workflow success or failure.
+description: Sends a Discord notification for workflow success, failure, or cancellation.
 
 inputs:
   webhook-url:
@@ -11,35 +11,54 @@ inputs:
     required: false
     default: ""
 
+  job-status:
+    description: "Job status from the caller (pass: ${{ job.status }}). Expected: success|failure|cancelled."
+    required: true
+
 runs:
   using: composite
   steps:
     - name: Send Discord notification on success
-      if: success()
+      if: ${{ inputs.job-status == 'success' }}
       uses: tsickert/discord-webhook@v7.0.0
       with:
         webhook-url: ${{ inputs.webhook-url }}
         username: "Alconite Bot"
         avatar-url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
-        embed-title: "✅ Published: ${{ github.repository }} ${{ inputs.release-version }}"
+        embed-title: "✅ Workflow succeeded: ${{ github.repository }}${{ inputs.release-version && format(' {0}', inputs.release-version) || '' }}"
         embed-color: 3066993
         embed-url: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         embed-description: |
-          **Tag:** `${{ github.ref_name }}`
+          **Ref:** `${{ github.ref_name }}`
           **Actor:** `${{ github.actor }}`
           **Run:** [View workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
     - name: Send Discord notification on failure
-      if: failure()
+      if: ${{ inputs.job-status == 'failure' }}
       uses: tsickert/discord-webhook@v7.0.0
       with:
         webhook-url: ${{ inputs.webhook-url }}
         username: "Alconite Bot"
         avatar-url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
-        embed-title: "❌ Publish failed: ${{ github.repository }} ${{ github.ref_name }}"
+        embed-title: "❌ Workflow failed: ${{ github.repository }} ${{ github.ref_name }}"
         embed-color: 15158332
         embed-url: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         embed-description: |
-          **Tag:** `${{ github.ref_name }}`
+          **Ref:** `${{ github.ref_name }}`
+          **Actor:** `${{ github.actor }}`
+          **Run:** [View workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+    - name: Send Discord notification on cancelled
+      if: ${{ inputs.job-status == 'cancelled' }}
+      uses: tsickert/discord-webhook@v7.0.0
+      with:
+        webhook-url: ${{ inputs.webhook-url }}
+        username: "Alconite Bot"
+        avatar-url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+        embed-title: "⚠️ Workflow cancelled: ${{ github.repository }} ${{ github.ref_name }}"
+        embed-color: 15844367
+        embed-url: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        embed-description: |
+          **Ref:** `${{ github.ref_name }}`
           **Actor:** `${{ github.actor }}`
           **Run:** [View workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
