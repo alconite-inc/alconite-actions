@@ -1,5 +1,5 @@
 name: Alconite Node CI
-description: Minimal Node CI (expand later for linting/coverage/etc.).
+description: Standard Node CI for npm, pnpm, and yarn projects.
 
 inputs:
   node-version:
@@ -12,10 +12,20 @@ inputs:
     required: false
     default: "auto"
 
+  pnpm-version:
+    description: "Optional pnpm version override. Empty uses package.json packageManager when available."
+    required: false
+    default: ""
+
   script:
-    description: "Script to run (e.g. test)."
+    description: "Script to run after install (e.g. test or build). Empty skips script execution."
     required: false
     default: "test"
+
+  cache-dependency-path:
+    description: "Override lockfile path(s) used for dependency caching. Empty uses package-manager defaults."
+    required: false
+    default: ""
 
   packages-token:
     description: "Token for private npm packages (GitHub Packages). Leave empty if not needed."
@@ -40,11 +50,120 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Setup Node
+    - name: Detect package manager
+      id: pm
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        package_manager_field=""
+        if [[ -f "package.json" ]]; then
+          package_manager_field="$(
+            tr -d '\r\n' < package.json \
+              | sed -nE 's/.*"packageManager"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p'
+          )"
+        fi
+
+        pm="${{ inputs.package-manager }}"
+        if [[ "$pm" == "auto" ]]; then
+          if [[ -f "pnpm-lock.yaml" || "$package_manager_field" == pnpm@* ]]; then
+            pm="pnpm"
+          elif [[ -f "yarn.lock" || "$package_manager_field" == yarn@* ]]; then
+            pm="yarn"
+          else
+            pm="npm"
+          fi
+        fi
+
+        case "$pm" in
+          npm|pnpm|yarn) ;;
+          *)
+            echo "::error::Unsupported package manager '$pm'. Use auto, npm, pnpm, or yarn."
+            exit 1
+            ;;
+        esac
+
+        pnpm_from_package_json="false"
+        if [[ "$package_manager_field" == pnpm@* ]]; then
+          pnpm_from_package_json="true"
+        fi
+
+        echo "value=$pm" >> "$GITHUB_OUTPUT"
+        echo "pnpm_from_package_json=$pnpm_from_package_json" >> "$GITHUB_OUTPUT"
+
+    - name: Resolve dependency cache inputs
+      id: cache
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [[ -n "${{ inputs.cache-dependency-path }}" ]]; then
+          paths="${{ inputs.cache-dependency-path }}"
+        else
+          case "${{ steps.pm.outputs.value }}" in
+            npm)
+              paths=$'**/package-lock.json\n**/npm-shrinkwrap.json'
+              ;;
+            pnpm)
+              paths='**/pnpm-lock.yaml'
+              ;;
+            yarn)
+              paths='**/yarn.lock'
+              ;;
+          esac
+        fi
+
+        found="false"
+        shopt -s globstar nullglob
+        while IFS= read -r pattern; do
+          [[ -z "$pattern" ]] && continue
+          mapfile -t matches < <(compgen -G "$pattern" || true)
+          if (( ${#matches[@]} > 0 )); then
+            found="true"
+            break
+          fi
+        done <<< "$paths"
+
+        {
+          echo "value<<EOF"
+          printf '%s\n' "$paths"
+          echo "EOF"
+          echo "enabled=$found"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Setup pnpm (explicit version)
+      if: ${{ steps.pm.outputs.value == 'pnpm' && inputs.pnpm-version != '' }}
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ inputs.pnpm-version }}
+        run_install: false
+
+    - name: Setup pnpm (packageManager)
+      if: ${{ steps.pm.outputs.value == 'pnpm' && inputs.pnpm-version == '' && steps.pm.outputs.pnpm_from_package_json == 'true' }}
+      uses: pnpm/action-setup@v4
+      with:
+        run_install: false
+
+    - name: Warn when pnpm version is implicit
+      if: ${{ steps.pm.outputs.value == 'pnpm' && inputs.pnpm-version == '' && steps.pm.outputs.pnpm_from_package_json != 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "::warning::No pnpm version was provided. Set package.json packageManager or pass pnpm-version for reproducible pnpm installs and cache support."
+
+    - name: Setup Node (with cache)
+      if: ${{ steps.cache.outputs.enabled == 'true' && (steps.pm.outputs.value != 'pnpm' || inputs.pnpm-version != '' || steps.pm.outputs.pnpm_from_package_json == 'true') }}
       uses: actions/setup-node@v4
       with:
         node-version: ${{ inputs.node-version }}
-        cache: npm
+        cache: ${{ steps.pm.outputs.value }}
+        cache-dependency-path: ${{ steps.cache.outputs.value }}
+
+    - name: Setup Node (without cache)
+      if: ${{ steps.cache.outputs.enabled != 'true' || (steps.pm.outputs.value == 'pnpm' && inputs.pnpm-version == '' && steps.pm.outputs.pnpm_from_package_json != 'true') }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
 
     - name: Configure npm auth (GitHub Packages)
       if: ${{ inputs.packages-token != '' }}
@@ -53,44 +172,53 @@ runs:
         set -euo pipefail
         echo "//npm.pkg.github.com/:_authToken=${{ inputs.packages-token }}" >> ~/.npmrc
 
-    - name: Detect package manager
-      id: pm
+    - name: Enable Corepack
+      if: ${{ steps.pm.outputs.value == 'yarn' || (steps.pm.outputs.value == 'pnpm' && inputs.pnpm-version == '' && steps.pm.outputs.pnpm_from_package_json != 'true') }}
       shell: bash
       run: |
         set -euo pipefail
-        pm="${{ inputs.package-manager }}"
-        if [[ "$pm" != "auto" ]]; then
-          echo "value=$pm" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        if [[ -f "pnpm-lock.yaml" ]]; then echo "value=pnpm" >> "$GITHUB_OUTPUT"; exit 0; fi
-        if [[ -f "yarn.lock" ]]; then echo "value=yarn" >> "$GITHUB_OUTPUT"; exit 0; fi
-        echo "value=npm" >> "$GITHUB_OUTPUT"
+        corepack enable
 
-    - name: Install + run (npm)
+    - name: Install dependencies (npm)
       if: ${{ steps.pm.outputs.value == 'npm' }}
       shell: bash
       run: |
         set -euo pipefail
         npm ci
-        npm run ${{ inputs.script }}
 
-    - name: Install + run (pnpm)
+    - name: Install dependencies (pnpm)
       if: ${{ steps.pm.outputs.value == 'pnpm' }}
       shell: bash
       run: |
         set -euo pipefail
-        corepack enable
         pnpm install --frozen-lockfile
-        pnpm run ${{ inputs.script }}
 
-    - name: Install + run (yarn)
+    - name: Install dependencies (yarn)
       if: ${{ steps.pm.outputs.value == 'yarn' }}
       shell: bash
       run: |
         set -euo pipefail
-        corepack enable
         yarn install --immutable || yarn install --frozen-lockfile
+
+    - name: Run script (npm)
+      if: ${{ steps.pm.outputs.value == 'npm' && inputs.script != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        npm run ${{ inputs.script }}
+
+    - name: Run script (pnpm)
+      if: ${{ steps.pm.outputs.value == 'pnpm' && inputs.script != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        pnpm run ${{ inputs.script }}
+
+    - name: Run script (yarn)
+      if: ${{ steps.pm.outputs.value == 'yarn' && inputs.script != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
         yarn run ${{ inputs.script }}
 
     - name: Publish Test Results (Node)

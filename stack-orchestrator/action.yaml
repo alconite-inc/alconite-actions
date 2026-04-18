@@ -57,10 +57,20 @@ inputs:
     required: false
     default: "auto"
 
+  node-pnpm-version:
+    description: "Optional pnpm version override. Empty uses package.json packageManager when available."
+    required: false
+    default: ""
+
   node-script:
-    description: "Node script to run (e.g. 'test')."
+    description: "Node script to run after install (e.g. 'test' or 'build'). Empty skips the script step."
     required: false
     default: "test"
+
+  node-cache-dependency-path:
+    description: "Override Node lockfile path(s) used for dependency caching."
+    required: false
+    default: ""
 
   docker:
     description: "Whether to run docker build/push step (true|false)."
@@ -228,7 +238,7 @@ runs:
         coverage-title: ${{ inputs.coverage-title }}
         maven-server-id: ${{ inputs.maven-server-id }}
 
-    - name: Node CI (minimal)
+    - name: Node CI
       if: ${{ steps.detect.outputs.stack == 'node' }}
       uses: alconite-inc/alconite-actions/node-ci@v1
       with:
@@ -237,7 +247,9 @@ runs:
         reporting-token: ${{ inputs.reporting-token }}
         reporting: ${{ inputs.reporting }}
         package-manager: ${{ inputs.node-package-manager }}
+        pnpm-version: ${{ inputs.node-pnpm-version }}
         script: ${{ inputs.node-script }}
+        cache-dependency-path: ${{ inputs.node-cache-dependency-path }}
 
     - name: Docker CI
       id: docker
