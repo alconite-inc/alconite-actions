@@ -1,0 +1,177 @@
+name: Alconite Rust CI
+description: Reproducible Rust formatting, linting, testing, and optional release builds with rustup and Cargo caching.
+
+inputs:
+  working-directory:
+    description: Cargo project or workspace directory.
+    required: false
+    default: .
+  toolchain:
+    description: Rust toolchain. Auto honors rust-toolchain.toml and otherwise uses stable.
+    required: false
+    default: auto
+  components:
+    description: Comma- or space-separated rustup components.
+    required: false
+    default: rustfmt,clippy
+  targets:
+    description: Optional comma- or space-separated rustup compilation targets.
+    required: false
+    default: ""
+  workspace:
+    description: Pass --workspace to Cargo commands (true or false).
+    required: false
+    default: "true"
+  all-features:
+    description: Pass --all-features to Cargo commands (true or false).
+    required: false
+    default: "false"
+  locked:
+    description: Require Cargo.lock without updates (true or false).
+    required: false
+    default: "true"
+  format:
+    description: Run cargo fmt --check (true or false).
+    required: false
+    default: "true"
+  clippy:
+    description: Run Clippy with warnings denied (true or false).
+    required: false
+    default: "true"
+  test:
+    description: Run cargo test (true or false).
+    required: false
+    default: "true"
+  build-release:
+    description: Run cargo build --release (true or false).
+    required: false
+    default: "false"
+
+outputs:
+  toolchain:
+    description: Active rustup toolchain.
+    value: ${{ steps.setup.outputs.toolchain }}
+  rustc-version:
+    description: Active rustc version.
+    value: ${{ steps.setup.outputs.rustc-version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate Rust inputs and install toolchain
+      id: setup
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        REQUESTED_TOOLCHAIN: ${{ inputs.toolchain }}
+        COMPONENTS: ${{ inputs.components }}
+        TARGETS: ${{ inputs.targets }}
+        USE_WORKSPACE: ${{ inputs.workspace }}
+        ALL_FEATURES: ${{ inputs.all-features }}
+        LOCKED: ${{ inputs.locked }}
+        RUN_FORMAT: ${{ inputs.format }}
+        RUN_CLIPPY: ${{ inputs.clippy }}
+        RUN_TEST: ${{ inputs.test }}
+        BUILD_RELEASE: ${{ inputs.build-release }}
+      run: |
+        set -euo pipefail
+        for value in "$USE_WORKSPACE" "$ALL_FEATURES" "$LOCKED" "$RUN_FORMAT" "$RUN_CLIPPY" "$RUN_TEST" "$BUILD_RELEASE"; do
+          case "$value" in true|false) ;; *) echo "::error::Boolean Rust inputs must be true or false"; exit 1 ;; esac
+        done
+        if [[ ! -f "$WORKING_DIRECTORY/Cargo.toml" ]]; then
+          echo "::error::working-directory must contain Cargo.toml"
+          exit 1
+        fi
+        cd -- "$WORKING_DIRECTORY"
+        rustup set profile minimal
+        if [[ "$REQUESTED_TOOLCHAIN" == "auto" ]]; then
+          if [[ -f rust-toolchain.toml || -f rust-toolchain ]]; then
+            rustc --version >/dev/null
+          else
+            rustup toolchain install stable --profile minimal
+            echo 'RUSTUP_TOOLCHAIN=stable' >> "$GITHUB_ENV"
+          fi
+        else
+          if [[ ! "$REQUESTED_TOOLCHAIN" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "::error::toolchain contains invalid characters"; exit 1; fi
+          rustup toolchain install "$REQUESTED_TOOLCHAIN" --profile minimal
+          printf 'RUSTUP_TOOLCHAIN=%s\n' "$REQUESTED_TOOLCHAIN" >> "$GITHUB_ENV"
+        fi
+
+        normalized_components="${COMPONENTS//,/ }"
+        read -r -a components <<< "$normalized_components"
+        for component in "${components[@]}"; do
+          [[ "$component" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "::error::Invalid rustup component"; exit 1; }
+          rustup component add "$component"
+        done
+        normalized_targets="${TARGETS//,/ }"
+        read -r -a targets <<< "$normalized_targets"
+        for target in "${targets[@]}"; do
+          [[ "$target" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "::error::Invalid rustup target"; exit 1; }
+          rustup target add "$target"
+        done
+        printf 'toolchain=%s\nrustc-version=%s\n' "$(rustup show active-toolchain | cut -d' ' -f1)" "$(rustc --version)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Cargo cache
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+      with:
+        workspaces: ${{ inputs.working-directory }} -> target
+        cache-on-failure: false
+
+    - name: Check Rust formatting
+      if: ${{ inputs.format == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CARGO_TERM_COLOR: always
+      run: cargo fmt --all --check
+
+    - name: Run Clippy
+      if: ${{ inputs.clippy == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        USE_WORKSPACE: ${{ inputs.workspace }}
+        ALL_FEATURES: ${{ inputs.all-features }}
+        LOCKED: ${{ inputs.locked }}
+        CARGO_TERM_COLOR: always
+      run: |
+        set -euo pipefail
+        args=(--all-targets)
+        if [[ "$USE_WORKSPACE" == "true" ]]; then args+=(--workspace); fi
+        if [[ "$ALL_FEATURES" == "true" ]]; then args+=(--all-features); fi
+        if [[ "$LOCKED" == "true" ]]; then args+=(--locked); fi
+        cargo clippy "${args[@]}" -- -D warnings
+
+    - name: Run Rust tests
+      if: ${{ inputs.test == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        USE_WORKSPACE: ${{ inputs.workspace }}
+        ALL_FEATURES: ${{ inputs.all-features }}
+        LOCKED: ${{ inputs.locked }}
+        CARGO_TERM_COLOR: always
+      run: |
+        set -euo pipefail
+        args=()
+        if [[ "$USE_WORKSPACE" == "true" ]]; then args+=(--workspace); fi
+        if [[ "$ALL_FEATURES" == "true" ]]; then args+=(--all-features); fi
+        if [[ "$LOCKED" == "true" ]]; then args+=(--locked); fi
+        cargo test "${args[@]}"
+
+    - name: Build Rust release artifacts
+      if: ${{ inputs.build-release == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        USE_WORKSPACE: ${{ inputs.workspace }}
+        ALL_FEATURES: ${{ inputs.all-features }}
+        LOCKED: ${{ inputs.locked }}
+        CARGO_TERM_COLOR: always
+      run: |
+        set -euo pipefail
+        args=(--release)
+        if [[ "$USE_WORKSPACE" == "true" ]]; then args+=(--workspace); fi
+        if [[ "$ALL_FEATURES" == "true" ]]; then args+=(--all-features); fi
+        if [[ "$LOCKED" == "true" ]]; then args+=(--locked); fi
+        cargo build "${args[@]}"

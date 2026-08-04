@@ -1,0 +1,79 @@
+name: Alconite Contract Guard
+author: Alconite Engineering
+description: Upload an OpenAPI candidate to Alconite Contract Guard and enforce its release gate.
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  project-id:
+    description: Stable Contract Guard project identifier beginning with cgprj_.
+    required: true
+  project-token:
+    description: Project-scoped Contract Guard bearer token beginning with alc_cg_.
+    required: true
+  candidate-path:
+    description: Path to the OpenAPI 3.0 or 3.1 JSON, YAML, or YML candidate.
+    required: false
+    default: openapi.yaml
+  display-name:
+    description: Optional release or build label shown in Contract Guard project history.
+    required: false
+    default: ""
+  api-url:
+    description: Alconite Platform API base URL.
+    required: false
+    default: https://alconite.com
+  idempotency-key:
+    description: Optional key for one logical check attempt. A deterministic key is generated when omitted.
+    required: false
+    default: ""
+  timeout-seconds:
+    description: Per-request timeout in seconds, from 1 through 600.
+    required: false
+    default: "120"
+  retry-attempts:
+    description: Total attempts for network errors and transient 502, 503, or 504 responses, from 1 through 5.
+    required: false
+    default: "3"
+  fail-on:
+    description: Gate threshold (failed, warnings, or never).
+    required: false
+    default: failed
+  report-path:
+    description: Optional path for the canonical JSON report. Defaults to the runner temporary directory.
+    required: false
+    default: ""
+
+outputs:
+  check-id:
+    description: Stable identifier for the completed Contract Guard check.
+  project-id:
+    description: Stable identifier for the Contract Guard project.
+  status:
+    description: Durable check processing status.
+  gate-result:
+    description: Release gate result (passed, passed_with_warnings, or failed).
+  report-url:
+    description: Absolute canonical machine-report URL.
+  report-path:
+    description: Local path containing the canonical JSON report.
+  baseline-content-hash:
+    description: SHA-256 fingerprint reported for the promoted baseline.
+  candidate-content-hash:
+    description: SHA-256 fingerprint reported for the validated candidate.
+  uploaded-content-hash:
+    description: SHA-256 fingerprint of the exact uploaded candidate bytes.
+  breaking-changes:
+    description: Number of breaking compatibility changes.
+  risky-changes:
+    description: Number of risky compatibility changes.
+  policy-failures:
+    description: Number of release-policy failures.
+  policy-warnings:
+    description: Number of release-policy warnings.
+
+runs:
+  using: node24
+  main: dist/index.js

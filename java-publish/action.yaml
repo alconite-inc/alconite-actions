@@ -1,127 +1,180 @@
-name: Alconite Java Publish - GitHub Packages
-description: Publishes Gradle or Maven Java artifacts on tag releases (expects vX.Y.Z). Maven uses -Drevision.
+name: Alconite Java Publish
+description: Publish a Gradle or Maven release with self-contained package authentication and strict SemVer validation.
 
 inputs:
+  java-version:
+    description: Java version to install.
+    required: false
+    default: "25"
   build-tool:
-    description: "Build tool selection (auto|gradle|maven)."
+    description: Build tool selection (auto, gradle, or maven).
     required: false
-    default: "auto"
-
+    default: auto
+  working-directory:
+    description: Project directory relative to the workspace.
+    required: false
+    default: .
+  packages-user:
+    description: Package registry username. Defaults to github.actor.
+    required: false
+    default: ""
+  packages-token:
+    description: Token used to publish packages.
+    required: true
+  maven-server-id:
+    description: Maven server id referenced by distributionManagement.
+    required: false
+    default: alconite-gpr
+  release-version:
+    description: Explicit SemVer release version. When empty, it is parsed from the current tag.
+    required: false
+    default: ""
   tag-prefix:
-    description: "Release tag prefix (default 'v'). Expects tags like v1.2.3."
+    description: Prefix removed from the current tag when release-version is empty.
     required: false
-    default: "v"
-
-  gradle-task:
-    description: "Gradle task(s) for publishing."
+    default: v
+  gradle-tasks:
+    description: Space-separated Gradle publishing tasks.
     required: false
-    default: "publish"
-
+    default: publish
   maven-goals:
-    description: "Maven goals for publishing."
+    description: Space-separated Maven publishing goals.
     required: false
-    default: "deploy"
-
-  maven-skip-tests:
-    description: "Skip tests during Maven publish (true|false). CI should have run tests already."
-    required: false
-    default: "true"
-
-  upload-artifact:
-    description: "Upload built jars as an artifact (true|false)."
+    default: deploy
+  skip-tests:
+    description: Skip tests during publication (true or false).
     required: false
     default: "true"
-
+  upload-artifacts:
+    description: Upload built JAR files (true or false).
+    required: false
+    default: "true"
   artifact-name:
-    description: "Artifact name for uploaded built jars."
+    description: Name of the uploaded release artifact.
     required: false
-    default: "built-artifact"
+    default: java-release-artifacts
+
+outputs:
+  build-tool:
+    description: Detected build tool.
+    value: ${{ steps.prepare.outputs.tool }}
+  release-version:
+    description: Validated SemVer release version.
+    value: ${{ steps.prepare.outputs.version }}
 
 runs:
   using: composite
   steps:
-    - name: Detect build tool
-      id: detect
+    - name: Validate release inputs
+      id: prepare
       shell: bash
+      env:
+        REQUESTED_TOOL: ${{ inputs.build-tool }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        PACKAGES_TOKEN: ${{ inputs.packages-token }}
+        RELEASE_VERSION_INPUT: ${{ inputs.release-version }}
+        TAG_PREFIX: ${{ inputs.tag-prefix }}
+        SKIP_TESTS: ${{ inputs.skip-tests }}
+        UPLOAD_ARTIFACTS: ${{ inputs.upload-artifacts }}
       run: |
         set -euo pipefail
-        tool="${{ inputs.build-tool }}"
-        if [[ "$tool" == "gradle" || "$tool" == "maven" ]]; then
-          echo "tool=$tool" >> "$GITHUB_OUTPUT"
-          exit 0
+        if [[ -z "$PACKAGES_TOKEN" ]]; then echo "::error::packages-token is required"; exit 1; fi
+        case "$SKIP_TESTS" in true|false) ;; *) echo "::error::skip-tests must be true or false"; exit 1 ;; esac
+        case "$UPLOAD_ARTIFACTS" in true|false) ;; *) echo "::error::upload-artifacts must be true or false"; exit 1 ;; esac
+        if [[ ! -d "$WORKING_DIRECTORY" ]]; then echo "::error::working-directory does not exist"; exit 1; fi
+        cd -- "$WORKING_DIRECTORY"
+        tool="$REQUESTED_TOOL"
+        if [[ "$tool" == "auto" ]]; then
+          if [[ -f gradlew || -f build.gradle || -f build.gradle.kts ]]; then tool=gradle
+          elif [[ -f mvnw || -f pom.xml ]]; then tool=maven
+          else echo "::error::Unable to detect Gradle or Maven"; exit 1
+          fi
         fi
+        case "$tool" in gradle|maven) ;; *) echo "::error::build-tool must be auto, gradle, or maven"; exit 1 ;; esac
 
-        if [[ -f "./gradlew" || -f "build.gradle" || -f "build.gradle.kts" ]]; then
-          echo "tool=gradle" >> "$GITHUB_OUTPUT"
-          exit 0
+        version="$RELEASE_VERSION_INPUT"
+        if [[ -z "$version" ]]; then
+          if [[ -z "$TAG_PREFIX" || "$GITHUB_REF_TYPE" != "tag" || "$GITHUB_REF_NAME" != "$TAG_PREFIX"* ]]; then
+            echo "::error::A release-version or a matching release tag is required"
+            exit 1
+          fi
+          version="${GITHUB_REF_NAME#"$TAG_PREFIX"}"
         fi
+        semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+        if [[ ! "$version" =~ $semver ]]; then echo "::error::release version must be valid SemVer"; exit 1; fi
+        printf 'tool=%s\nversion=%s\n' "$tool" "$version" >> "$GITHUB_OUTPUT"
 
-        if [[ -f "./mvnw" || -f "pom.xml" ]]; then
-          echo "tool=maven" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
+    - name: Set up Java for Gradle publishing
+      if: ${{ steps.prepare.outputs.tool == 'gradle' }}
+      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java-version }}
 
-        echo "::error::Unable to detect build tool. Provide inputs.build-tool=gradle|maven."
-        exit 1
+    - name: Set up Gradle for publishing
+      if: ${{ steps.prepare.outputs.tool == 'gradle' }}
+      uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+      with:
+        cache-provider: basic
 
-    - name: Gather Release Version
+    - name: Set up Java for Maven publishing
+      if: ${{ steps.prepare.outputs.tool == 'maven' }}
+      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java-version }}
+        cache: maven
+        server-id: ${{ inputs.maven-server-id }}
+        server-username: ALCONITE_PACKAGES_USER
+        server-password: ALCONITE_PACKAGES_TOKEN
+
+    - name: Publish with Gradle
+      if: ${{ steps.prepare.outputs.tool == 'gradle' }}
       shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        GRADLE_TASKS: ${{ inputs.gradle-tasks }}
+        RELEASE_VERSION: ${{ steps.prepare.outputs.version }}
+        SKIP_TESTS: ${{ inputs.skip-tests }}
+        ORG_GRADLE_PROJECT_gprUser: ${{ inputs.packages-user || github.actor }}
+        ORG_GRADLE_PROJECT_gprKey: ${{ inputs.packages-token }}
       run: |
         set -euo pipefail
-        ref="${GITHUB_REF_NAME}"
-        prefix="${{ inputs.tag-prefix }}"
-        if [[ "$ref" != ${prefix}* ]]; then
-          echo "::error::Tag must start with '${prefix}' (got '$ref')"
-          exit 1
-        fi
-        ver="${ref#${prefix}}"
-        if [[ -z "$ver" ]]; then
-          echo "::error::Could not parse version from tag '$ref'"
-          exit 1
-        fi
-        echo "RELEASE_VERSION=$ver" >> "$GITHUB_ENV"
+        cd -- "$WORKING_DIRECTORY"
+        test -f gradlew || { echo "::error::The Gradle wrapper is required"; exit 1; }
+        chmod +x gradlew
+        read -r -a tasks <<< "$GRADLE_TASKS"
+        args=(--no-daemon --stacktrace "-PreleaseVersion=$RELEASE_VERSION")
+        if [[ "$SKIP_TESTS" == "true" ]]; then args+=(-x test); fi
+        ./gradlew "${tasks[@]}" "${args[@]}"
 
-    - name: Verify Gradle credentials exist
-      if: ${{ steps.detect.outputs.tool == 'gradle' }}
+    - name: Publish with Maven
+      if: ${{ steps.prepare.outputs.tool == 'maven' }}
       shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        MAVEN_GOALS: ${{ inputs.maven-goals }}
+        RELEASE_VERSION: ${{ steps.prepare.outputs.version }}
+        SKIP_TESTS: ${{ inputs.skip-tests }}
+        ALCONITE_PACKAGES_USER: ${{ inputs.packages-user || github.actor }}
+        ALCONITE_PACKAGES_TOKEN: ${{ inputs.packages-token }}
       run: |
         set -euo pipefail
-        test -f "$HOME/.gradle/gradle.properties"
-        grep -q '^gpr\.key=' "$HOME/.gradle/gradle.properties"
+        cd -- "$WORKING_DIRECTORY"
+        test -f mvnw || { echo "::error::The Maven wrapper is required"; exit 1; }
+        chmod +x mvnw
+        read -r -a goals <<< "$MAVEN_GOALS"
+        args=(-B -ntp -Dstyle.color=always "-Drevision=$RELEASE_VERSION")
+        if [[ "$SKIP_TESTS" == "true" ]]; then args+=(-DskipTests); fi
+        ./mvnw "${args[@]}" "${goals[@]}"
 
-    - name: Verify Maven settings exist
-      if: ${{ steps.detect.outputs.tool == 'maven' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        test -f "$HOME/.m2/settings.xml"
-
-    - name: Publish to GitHub Packages (Gradle)
-      if: ${{ steps.detect.outputs.tool == 'gradle' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        chmod +x ./gradlew
-        ./gradlew ${{ inputs.gradle-task }} -PreleaseVersion="$RELEASE_VERSION" --no-daemon --stacktrace
-
-    - name: Publish to GitHub Packages (Maven)
-      if: ${{ steps.detect.outputs.tool == 'maven' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        chmod +x ./mvnw
-        args=(-B -ntp -Dstyle.color=always -Drevision="$RELEASE_VERSION")
-        if [[ "${{ inputs.maven-skip-tests }}" == "true" ]]; then
-          args+=(-DskipTests)
-        fi
-        ./mvnw "${args[@]}" ${{ inputs.maven-goals }}
-
-    - name: Upload Created Artifact
-      if: ${{ inputs.upload-artifact == 'true' }}
-      uses: actions/upload-artifact@v6
+    - name: Upload Java release artifacts
+      if: ${{ inputs.upload-artifacts == 'true' }}
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
       with:
         name: ${{ inputs.artifact-name }}
         path: |
           **/build/libs/*.jar
           **/target/*.jar
         if-no-files-found: error
+        retention-days: 30

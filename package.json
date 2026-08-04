@@ -1,0 +1,22 @@
+{
+  "name": "@alconite/contract-guard-action",
+  "version": "2.0.0",
+  "description": "GitHub Action for Alconite Contract Guard release checks",
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test": "npm run build:test && node --test build/test/*.test.js",
+    "typecheck": "tsc --noEmit",
+    "validate:actions": "node scripts/validate-actions.mjs",
+    "verify": "npm run typecheck && npm test && npm run validate:actions && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "yaml": "^2.8.0"
+  }
+}

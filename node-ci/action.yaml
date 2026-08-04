@@ -1,229 +1,225 @@
 name: Alconite Node CI
-description: Standard Node CI for npm, pnpm, and yarn projects.
+description: Reproducible Node 24 CI for locked npm, pnpm, and Yarn projects.
 
 inputs:
   node-version:
-    description: "Node version to install."
+    description: Supported Node.js version to install.
     required: false
-    default: "20"
-
+    default: "24"
   package-manager:
-    description: "Package manager (auto|npm|pnpm|yarn)."
+    description: Package manager selection (auto, npm, pnpm, or yarn).
     required: false
-    default: "auto"
-
+    default: auto
+  working-directory:
+    description: Project directory relative to the workspace.
+    required: false
+    default: .
   pnpm-version:
-    description: "Optional pnpm version override. Empty uses package.json packageManager when available."
+    description: Optional pnpm version. Otherwise package.json must pin packageManager.
     required: false
     default: ""
-
+  yarn-version:
+    description: Optional Yarn version. Otherwise package.json must pin packageManager.
+    required: false
+    default: ""
   script:
-    description: "Script to run after install (e.g. test or build). Empty skips script execution."
+    description: Package script name to run after installation. Empty skips execution.
     required: false
-    default: "test"
-
+    default: test
   cache-dependency-path:
-    description: "Override lockfile path(s) used for dependency caching. Empty uses package-manager defaults."
+    description: Optional lockfile path used for dependency caching.
     required: false
     default: ""
-
+  registry-url:
+    description: Package registry URL used by setup-node.
+    required: false
+    default: https://npm.pkg.github.com
+  registry-scope:
+    description: Optional package registry scope, such as @alconite-inc.
+    required: false
+    default: ""
   packages-token:
-    description: "Token for private npm packages (GitHub Packages). Leave empty if not needed."
+    description: Optional token for private package installation.
     required: false
     default: ""
-
-  reporting-token:
-    description: "Token for PR checks/comments (usually github.token)."
-    required: false
-    default: ${{ github.token }}
-
-  reporting:
-    description: "Enable unit test result publishing (true|false)."
+  upload-reports:
+    description: Upload JUnit XML reports (true or false).
     required: false
     default: "true"
-
   junit-files:
-    description: "Glob(s) to JUnit XML test result files."
+    description: Paths or globs for JUnit XML reports.
     required: false
     default: "**/junit*.xml"
+  artifact-name:
+    description: Name of the uploaded test report artifact.
+    required: false
+    default: node-test-reports
+
+outputs:
+  package-manager:
+    description: Detected package manager.
+    value: ${{ steps.detect.outputs.manager }}
 
 runs:
   using: composite
   steps:
-    - name: Detect package manager
-      id: pm
+    - name: Validate inputs and detect package manager
+      id: detect
       shell: bash
+      env:
+        REQUESTED_MANAGER: ${{ inputs.package-manager }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        CACHE_DEPENDENCY_PATH: ${{ inputs.cache-dependency-path }}
+        PNPM_VERSION: ${{ inputs.pnpm-version }}
+        YARN_VERSION: ${{ inputs.yarn-version }}
+        SCRIPT_NAME: ${{ inputs.script }}
+        UPLOAD_REPORTS: ${{ inputs.upload-reports }}
       run: |
         set -euo pipefail
-
-        package_manager_field=""
-        if [[ -f "package.json" ]]; then
-          package_manager_field="$(
-            tr -d '\r\n' < package.json \
-              | sed -nE 's/.*"packageManager"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p'
-          )"
+        case "$UPLOAD_REPORTS" in true|false) ;; *) echo "::error::upload-reports must be true or false"; exit 1 ;; esac
+        if [[ ! -d "$WORKING_DIRECTORY" || ! -f "$WORKING_DIRECTORY/package.json" ]]; then
+          echo "::error::working-directory must contain package.json"
+          exit 1
+        fi
+        if [[ -n "$SCRIPT_NAME" && ! "$SCRIPT_NAME" =~ ^[A-Za-z0-9_.:@/-]+$ ]]; then
+          echo "::error::script must be a package script name, not a shell command"
+          exit 1
         fi
 
-        pm="${{ inputs.package-manager }}"
-        if [[ "$pm" == "auto" ]]; then
-          if [[ -f "pnpm-lock.yaml" || "$package_manager_field" == pnpm@* ]]; then
-            pm="pnpm"
-          elif [[ -f "yarn.lock" || "$package_manager_field" == yarn@* ]]; then
-            pm="yarn"
-          else
-            pm="npm"
+        package_manager_field="$(node -e "const path=require('node:path'); const p=require(path.resolve(process.argv[1], 'package.json')); process.stdout.write(typeof p.packageManager === 'string' ? p.packageManager : '')" "$WORKING_DIRECTORY")"
+        if [[ "$package_manager_field" == *$'\n'* || "$package_manager_field" == *$'\r'* ]]; then
+          echo "::error::packageManager must be a single line"
+          exit 1
+        fi
+        manager="$REQUESTED_MANAGER"
+        if [[ "$manager" == "auto" ]]; then
+          if [[ -f "$WORKING_DIRECTORY/pnpm-lock.yaml" || "$package_manager_field" == pnpm@* ]]; then manager=pnpm
+          elif [[ -f "$WORKING_DIRECTORY/yarn.lock" || "$package_manager_field" == yarn@* ]]; then manager=yarn
+          else manager=npm
           fi
         fi
+        case "$manager" in npm|pnpm|yarn) ;; *) echo "::error::package-manager must be auto, npm, pnpm, or yarn"; exit 1 ;; esac
 
-        case "$pm" in
-          npm|pnpm|yarn) ;;
-          *)
-            echo "::error::Unsupported package manager '$pm'. Use auto, npm, pnpm, or yarn."
-            exit 1
-            ;;
+        case "$manager" in
+          npm) lockfile="$WORKING_DIRECTORY/package-lock.json"; [[ -f "$lockfile" ]] || lockfile="$WORKING_DIRECTORY/npm-shrinkwrap.json" ;;
+          pnpm) lockfile="$WORKING_DIRECTORY/pnpm-lock.yaml" ;;
+          yarn) lockfile="$WORKING_DIRECTORY/yarn.lock" ;;
         esac
-
-        pnpm_from_package_json="false"
-        if [[ "$package_manager_field" == pnpm@* ]]; then
-          pnpm_from_package_json="true"
+        if [[ ! -f "$lockfile" ]]; then echo "::error::A committed lockfile is required for $manager"; exit 1; fi
+        if [[ -n "$CACHE_DEPENDENCY_PATH" ]]; then lockfile="$CACHE_DEPENDENCY_PATH"; fi
+        if [[ "$manager" == "pnpm" && -z "$PNPM_VERSION" && "$package_manager_field" != pnpm@* ]]; then
+          echo "::error::Pin pnpm in package.json packageManager or provide pnpm-version"
+          exit 1
         fi
-
-        echo "value=$pm" >> "$GITHUB_OUTPUT"
-        echo "pnpm_from_package_json=$pnpm_from_package_json" >> "$GITHUB_OUTPUT"
-
-    - name: Resolve dependency cache inputs
-      id: cache
-      shell: bash
-      run: |
-        set -euo pipefail
-
-        if [[ -n "${{ inputs.cache-dependency-path }}" ]]; then
-          paths="${{ inputs.cache-dependency-path }}"
-        else
-          case "${{ steps.pm.outputs.value }}" in
-            npm)
-              paths=$'**/package-lock.json\n**/npm-shrinkwrap.json'
-              ;;
-            pnpm)
-              paths='**/pnpm-lock.yaml'
-              ;;
-            yarn)
-              paths='**/yarn.lock'
-              ;;
-          esac
+        if [[ "$manager" == "yarn" && -z "$YARN_VERSION" && "$package_manager_field" != yarn@* ]]; then
+          echo "::error::Pin Yarn in package.json packageManager or provide yarn-version"
+          exit 1
         fi
-
-        found="false"
-        shopt -s globstar nullglob
-        while IFS= read -r pattern; do
-          [[ -z "$pattern" ]] && continue
-          mapfile -t matches < <(compgen -G "$pattern" || true)
-          if (( ${#matches[@]} > 0 )); then
-            found="true"
-            break
-          fi
-        done <<< "$paths"
-
+        yarn_spec=""
+        if [[ "$manager" == "yarn" ]]; then
+          if [[ -n "$YARN_VERSION" ]]; then yarn_spec="yarn@$YARN_VERSION"; else yarn_spec="$package_manager_field"; fi
+          [[ "$yarn_spec" != *$'\n'* && "$yarn_spec" != *$'\r'* ]] || { echo "::error::Invalid Yarn version"; exit 1; }
+        fi
         {
-          echo "value<<EOF"
-          printf '%s\n' "$paths"
-          echo "EOF"
-          echo "enabled=$found"
+          printf 'manager=%s\nlockfile=%s\npnpm-from-package=%s\n' \
+            "$manager" "$lockfile" "$([[ "$package_manager_field" == pnpm@* ]] && echo true || echo false)"
+          printf 'yarn-spec=%s\n' "$yarn_spec"
         } >> "$GITHUB_OUTPUT"
 
-    - name: Setup pnpm (explicit version)
-      if: ${{ steps.pm.outputs.value == 'pnpm' && inputs.pnpm-version != '' }}
-      uses: pnpm/action-setup@v4
+    - name: Set up explicit pnpm
+      if: ${{ steps.detect.outputs.manager == 'pnpm' && inputs.pnpm-version != '' }}
+      uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       with:
         version: ${{ inputs.pnpm-version }}
         run_install: false
 
-    - name: Setup pnpm (packageManager)
-      if: ${{ steps.pm.outputs.value == 'pnpm' && inputs.pnpm-version == '' && steps.pm.outputs.pnpm_from_package_json == 'true' }}
-      uses: pnpm/action-setup@v4
+    - name: Set up package.json pnpm
+      if: ${{ steps.detect.outputs.manager == 'pnpm' && inputs.pnpm-version == '' }}
+      uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       with:
         run_install: false
 
-    - name: Warn when pnpm version is implicit
-      if: ${{ steps.pm.outputs.value == 'pnpm' && inputs.pnpm-version == '' && steps.pm.outputs.pnpm_from_package_json != 'true' }}
+    - name: Enable Corepack for Yarn
+      if: ${{ steps.detect.outputs.manager == 'yarn' }}
       shell: bash
-      run: |
-        set -euo pipefail
-        echo "::warning::No pnpm version was provided. Set package.json packageManager or pass pnpm-version for reproducible pnpm installs and cache support."
-
-    - name: Setup Node (with cache)
-      if: ${{ steps.cache.outputs.enabled == 'true' && (steps.pm.outputs.value != 'pnpm' || inputs.pnpm-version != '' || steps.pm.outputs.pnpm_from_package_json == 'true') }}
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ inputs.node-version }}
-        cache: ${{ steps.pm.outputs.value }}
-        cache-dependency-path: ${{ steps.cache.outputs.value }}
-
-    - name: Setup Node (without cache)
-      if: ${{ steps.cache.outputs.enabled != 'true' || (steps.pm.outputs.value == 'pnpm' && inputs.pnpm-version == '' && steps.pm.outputs.pnpm_from_package_json != 'true') }}
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ inputs.node-version }}
-
-    - name: Configure npm auth (GitHub Packages)
-      if: ${{ inputs.packages-token != '' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        echo "//npm.pkg.github.com/:_authToken=${{ inputs.packages-token }}" >> ~/.npmrc
-
-    - name: Enable Corepack
-      if: ${{ steps.pm.outputs.value == 'yarn' || (steps.pm.outputs.value == 'pnpm' && inputs.pnpm-version == '' && steps.pm.outputs.pnpm_from_package_json != 'true') }}
-      shell: bash
+      env:
+        YARN_SPEC: ${{ steps.detect.outputs.yarn-spec }}
       run: |
         set -euo pipefail
         corepack enable
+        corepack prepare "$YARN_SPEC" --activate
 
-    - name: Install dependencies (npm)
-      if: ${{ steps.pm.outputs.value == 'npm' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        npm ci
-
-    - name: Install dependencies (pnpm)
-      if: ${{ steps.pm.outputs.value == 'pnpm' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        pnpm install --frozen-lockfile
-
-    - name: Install dependencies (yarn)
-      if: ${{ steps.pm.outputs.value == 'yarn' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        yarn install --immutable || yarn install --frozen-lockfile
-
-    - name: Run script (npm)
-      if: ${{ steps.pm.outputs.value == 'npm' && inputs.script != '' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        npm run ${{ inputs.script }}
-
-    - name: Run script (pnpm)
-      if: ${{ steps.pm.outputs.value == 'pnpm' && inputs.script != '' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        pnpm run ${{ inputs.script }}
-
-    - name: Run script (yarn)
-      if: ${{ steps.pm.outputs.value == 'yarn' && inputs.script != '' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        yarn run ${{ inputs.script }}
-
-    - name: Publish Test Results (Node)
-      if: ${{ inputs.reporting == 'true' && always() }}
-      uses: EnricoMi/publish-unit-test-result-action@v2
+    - name: Set up Node.js
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
       with:
-        files: ${{ inputs.junit-files }}
-        github_token: ${{ inputs.reporting-token }}
+        node-version: ${{ inputs.node-version }}
+        cache: ${{ steps.detect.outputs.manager }}
+        cache-dependency-path: ${{ steps.detect.outputs.lockfile }}
+        package-manager-cache: false
+        registry-url: ${{ inputs.registry-url }}
+        scope: ${{ inputs.registry-scope }}
+
+    - name: Install npm dependencies
+      if: ${{ steps.detect.outputs.manager == 'npm' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        NODE_AUTH_TOKEN: ${{ inputs.packages-token }}
+      run: npm ci
+
+    - name: Install pnpm dependencies
+      if: ${{ steps.detect.outputs.manager == 'pnpm' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        NODE_AUTH_TOKEN: ${{ inputs.packages-token }}
+      run: pnpm install --frozen-lockfile
+
+    - name: Install Yarn dependencies
+      if: ${{ steps.detect.outputs.manager == 'yarn' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        NODE_AUTH_TOKEN: ${{ inputs.packages-token }}
+      run: |
+        set -euo pipefail
+        major="$(yarn --version | cut -d. -f1)"
+        if (( major >= 2 )); then yarn install --immutable
+        else yarn install --frozen-lockfile
+        fi
+
+    - name: Run npm script
+      if: ${{ steps.detect.outputs.manager == 'npm' && inputs.script != '' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SCRIPT_NAME: ${{ inputs.script }}
+        NODE_AUTH_TOKEN: ${{ inputs.packages-token }}
+      run: npm run "$SCRIPT_NAME"
+
+    - name: Run pnpm script
+      if: ${{ steps.detect.outputs.manager == 'pnpm' && inputs.script != '' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SCRIPT_NAME: ${{ inputs.script }}
+        NODE_AUTH_TOKEN: ${{ inputs.packages-token }}
+      run: pnpm run "$SCRIPT_NAME"
+
+    - name: Run Yarn script
+      if: ${{ steps.detect.outputs.manager == 'yarn' && inputs.script != '' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SCRIPT_NAME: ${{ inputs.script }}
+        NODE_AUTH_TOKEN: ${{ inputs.packages-token }}
+      run: yarn run "$SCRIPT_NAME"
+
+    - name: Upload Node test reports
+      if: ${{ inputs.upload-reports == 'true' && always() }}
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.junit-files }}
+        if-no-files-found: ignore
+        retention-days: 14

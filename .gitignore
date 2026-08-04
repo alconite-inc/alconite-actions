@@ -2,3 +2,15 @@
 .idea
 *.iml
 *.iws
+
+### Node / test tooling ###
+node_modules/
+build/
+.tools/
+npm-debug.log*
+target/
+
+### Local environment ###
+.env
+.env.*
+!.env.example

@@ -1,91 +1,53 @@
 name: Alconite Java CI
-description: Standard Java CI (Gradle or Maven) with GitHub Packages auth, wrapper policy, reporting, and test artifacts.
+description: Reproducible Gradle or Maven CI with wrapper enforcement, safe package authentication, caching, and report artifacts.
 
 inputs:
   java-version:
-    description: "Java version to install."
+    description: Java version to install.
     required: false
     default: "25"
-
   build-tool:
-    description: "Build tool selection (auto|gradle|maven)."
+    description: Build tool selection (auto, gradle, or maven).
     required: false
-    default: "auto"
-
-  packages-token:
-    description: "Token/PAT for reading GitHub Packages Maven registry. Leave empty if not needed."
+    default: auto
+  working-directory:
+    description: Project directory relative to the workspace.
+    required: false
+    default: .
+  packages-user:
+    description: GitHub Packages username. Defaults to github.actor.
     required: false
     default: ""
-
-  reporting-token:
-    description: "Token for PR comments/checks (usually github.token)."
+  packages-token:
+    description: Optional token for reading private GitHub Packages dependencies.
     required: false
-    default: ${{ github.token }}
-
-  reporting:
-    description: "Enable reporting (coverage comment, junit publish, artifacts) (true|false)."
+    default: ""
+  maven-server-id:
+    description: Maven server id referenced by the project distribution configuration.
     required: false
-    default: "true"
-
+    default: alconite-gpr
   skip-tests:
-    description: "Skip tests during CI build (true|false)."
+    description: Skip test execution (true or false).
     required: false
     default: "false"
-
   gradle-tasks:
-    description: "Gradle tasks to run (e.g. 'test' or 'test jacocoTestReport')."
+    description: Space-separated Gradle tasks. Values are passed as arguments, not shell source.
     required: false
-    default: "test"
-
+    default: test
   maven-goals:
-    description: "Maven goals/phases to run (e.g. 'verify')."
+    description: Space-separated Maven goals. Values are passed as arguments, not shell source.
     required: false
-    default: "verify"
-
-  maven-server-id:
-    description: "Maven server id used in ~/.m2/settings.xml for GitHub Packages credentials."
+    default: verify
+  upload-reports:
+    description: Upload test and coverage reports (true or false).
     required: false
-    default: "alconite-gpr"
-
-  jacoco-paths-gradle:
-    description: "Glob(s) to JaCoCo XML report(s) for Gradle."
-    required: false
-    default: "${{ github.workspace }}/**/build/reports/jacoco/test/jacocoTestReport.xml"
-
-  jacoco-paths-maven:
-    description: "Glob(s) to JaCoCo XML report(s) for Maven."
-    required: false
-    default: "${{ github.workspace }}/**/target/site/jacoco/jacoco.xml"
-
-  junit-files-gradle:
-    description: "Glob(s) to Gradle JUnit XML test result files."
-    required: false
-    default: "**/build/test-results/**/*.xml"
-
-  junit-files-maven:
-    description: "Glob(s) to Maven Surefire/Failsafe JUnit XML test result files."
-    required: false
-    default: |
-      **/target/surefire-reports/*.xml
-      **/target/failsafe-reports/*.xml
-
-  min-coverage-overall:
-    description: "Minimum overall coverage percentage for PR coverage comment."
-    required: false
-    default: "80"
-
-  coverage-title:
-    description: "Title for the PR coverage report/comment."
-    required: false
-    default: "Code Coverage Report"
-
+    default: "true"
   artifact-name:
-    description: "Name of the uploaded artifact containing test/coverage reports."
+    description: Name of the report artifact.
     required: false
-    default: "test-report"
-
+    default: java-test-reports
   artifact-paths:
-    description: "Paths/globs to upload as artifact for test/coverage reports."
+    description: Paths or globs to upload for test and coverage reports.
     required: false
     default: |
       **/build/reports/tests/
@@ -96,169 +58,118 @@ inputs:
 
 outputs:
   build-tool:
-    description: "Detected build tool (gradle|maven)."
+    description: Detected build tool (gradle or maven).
     value: ${{ steps.detect.outputs.tool }}
 
 runs:
   using: composite
   steps:
-    - name: Detect build tool
+    - name: Validate inputs and detect build tool
       id: detect
       shell: bash
+      env:
+        REQUESTED_TOOL: ${{ inputs.build-tool }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        SKIP_TESTS: ${{ inputs.skip-tests }}
+        UPLOAD_REPORTS: ${{ inputs.upload-reports }}
       run: |
         set -euo pipefail
-        tool="${{ inputs.build-tool }}"
-        if [[ "$tool" == "gradle" || "$tool" == "maven" ]]; then
-          echo "tool=$tool" >> "$GITHUB_OUTPUT"
-          exit 0
+        case "$SKIP_TESTS" in true|false) ;; *) echo "::error::skip-tests must be true or false"; exit 1 ;; esac
+        case "$UPLOAD_REPORTS" in true|false) ;; *) echo "::error::upload-reports must be true or false"; exit 1 ;; esac
+        if [[ ! -d "$WORKING_DIRECTORY" ]]; then
+          echo "::error::working-directory does not exist"
+          exit 1
         fi
-
-        if [[ -f "./gradlew" || -f "build.gradle" || -f "build.gradle.kts" || -f "settings.gradle" || -f "settings.gradle.kts" ]]; then
-          echo "tool=gradle" >> "$GITHUB_OUTPUT"
-          exit 0
+        cd -- "$WORKING_DIRECTORY"
+        tool="$REQUESTED_TOOL"
+        if [[ "$tool" == "auto" ]]; then
+          if [[ -f gradlew || -f build.gradle || -f build.gradle.kts || -f settings.gradle || -f settings.gradle.kts ]]; then
+            tool=gradle
+          elif [[ -f mvnw || -f pom.xml ]]; then
+            tool=maven
+          else
+            echo "::error::Unable to detect Gradle or Maven in working-directory"
+            exit 1
+          fi
         fi
+        case "$tool" in gradle|maven) ;; *) echo "::error::build-tool must be auto, gradle, or maven"; exit 1 ;; esac
+        printf 'tool=%s\n' "$tool" >> "$GITHUB_OUTPUT"
 
-        if [[ -f "./mvnw" || -f "pom.xml" ]]; then
-          echo "tool=maven" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        echo "::error::Unable to detect build tool. Provide inputs.build-tool=gradle|maven."
-        exit 1
-
-    - name: Setup Java
-      uses: actions/setup-java@v5
+    - name: Set up Java for Gradle
+      if: ${{ steps.detect.outputs.tool == 'gradle' }}
+      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
       with:
         distribution: temurin
         java-version: ${{ inputs.java-version }}
-        cache: ${{ steps.detect.outputs.tool }}
 
-    - name: Setup Gradle
+    - name: Set up Gradle
       if: ${{ steps.detect.outputs.tool == 'gradle' }}
-      uses: gradle/actions/setup-gradle@v5
+      uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+      with:
+        cache-provider: basic
 
-    - name: Validate Gradle Wrapper
+    - name: Set up Java for Maven
+      if: ${{ steps.detect.outputs.tool == 'maven' }}
+      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java-version }}
+        cache: maven
+        server-id: ${{ inputs.maven-server-id }}
+        server-username: ALCONITE_PACKAGES_USER
+        server-password: ALCONITE_PACKAGES_TOKEN
+
+    - name: Run Gradle CI
       if: ${{ steps.detect.outputs.tool == 'gradle' }}
-      uses: gradle/actions/wrapper-validation@v5
-
-    - name: Configure GitHub Packages for Gradle
-      if: ${{ steps.detect.outputs.tool == 'gradle' && inputs.packages-token != '' }}
       shell: bash
       env:
-        GPR_USER: ${{ github.actor }}
-        GPR_KEY: ${{ inputs.packages-token }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        GRADLE_TASKS: ${{ inputs.gradle-tasks }}
+        SKIP_TESTS: ${{ inputs.skip-tests }}
+        ORG_GRADLE_PROJECT_gprUser: ${{ inputs.packages-user || github.actor }}
+        ORG_GRADLE_PROJECT_gprKey: ${{ inputs.packages-token }}
       run: |
         set -euo pipefail
-        mkdir -p "$HOME/.gradle"
-        props="$HOME/.gradle/gradle.properties"
-        touch "$props"
-        grep -vE '^(gpr\.user|gpr\.key)=' "$props" > "${props}.tmp" || true
-        mv "${props}.tmp" "$props"
-        {
-          echo "gpr.user=$GPR_USER"
-          echo "gpr.key=$GPR_KEY"
-        } >> "$props"
-
-    - name: Enforce Maven Wrapper
-      if: ${{ steps.detect.outputs.tool == 'maven' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        if [[ ! -f "./mvnw" ]]; then
-          echo "::error::Maven wrapper (./mvnw) is required by company policy."
+        cd -- "$WORKING_DIRECTORY"
+        if [[ ! -f gradlew ]]; then
+          echo "::error::The Gradle wrapper (gradlew) is required"
           exit 1
         fi
-        chmod +x ./mvnw
-
-    - name: Configure GitHub Packages for Maven
-      if: ${{ steps.detect.outputs.tool == 'maven' && inputs.packages-token != '' }}
-      shell: bash
-      env:
-        GPR_USER: ${{ github.actor }}
-        GPR_KEY: ${{ inputs.packages-token }}
-        SERVER_ID: ${{ inputs.maven-server-id }}
-      run: |
-        set -euo pipefail
-        mkdir -p "$HOME/.m2"
-        cat > "$HOME/.m2/settings.xml" <<EOF
-        <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
-                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                  xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
-          <servers>
-            <server>
-              <id>${SERVER_ID}</id>
-              <username>${GPR_USER}</username>
-              <password>${GPR_KEY}</password>
-            </server>
-          </servers>
-        </settings>
-        EOF
-
-    - name: Gradle build & test
-      if: ${{ steps.detect.outputs.tool == 'gradle' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        chmod +x ./gradlew
+        chmod +x gradlew
+        read -r -a tasks <<< "$GRADLE_TASKS"
+        if (( ${#tasks[@]} == 0 )); then echo "::error::gradle-tasks must not be empty"; exit 1; fi
         args=(--no-daemon --stacktrace)
-        if [[ "${{ inputs.skip-tests }}" == "true" ]]; then
-          args+=(-x test)
-        fi
-        # shellcheck disable=SC2206
-        tasks=(${{ inputs.gradle-tasks }})
+        if [[ "$SKIP_TESTS" == "true" ]]; then args+=(-x test); fi
         ./gradlew "${tasks[@]}" "${args[@]}"
 
-    - name: Maven build & test
+    - name: Run Maven CI
       if: ${{ steps.detect.outputs.tool == 'maven' }}
       shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        MAVEN_GOALS: ${{ inputs.maven-goals }}
+        SKIP_TESTS: ${{ inputs.skip-tests }}
+        ALCONITE_PACKAGES_USER: ${{ inputs.packages-user || github.actor }}
+        ALCONITE_PACKAGES_TOKEN: ${{ inputs.packages-token }}
       run: |
         set -euo pipefail
-        args=(-B -ntp -Dstyle.color=always)
-        if [[ "${{ inputs.skip-tests }}" == "true" ]]; then
-          args+=(-DskipTests)
+        cd -- "$WORKING_DIRECTORY"
+        if [[ ! -f mvnw ]]; then
+          echo "::error::The Maven wrapper (mvnw) is required"
+          exit 1
         fi
-        # shellcheck disable=SC2206
-        goals=(${{ inputs.maven-goals }})
+        chmod +x mvnw
+        read -r -a goals <<< "$MAVEN_GOALS"
+        if (( ${#goals[@]} == 0 )); then echo "::error::maven-goals must not be empty"; exit 1; fi
+        args=(-B -ntp -Dstyle.color=always)
+        if [[ "$SKIP_TESTS" == "true" ]]; then args+=(-DskipTests); fi
         ./mvnw "${args[@]}" "${goals[@]}"
 
-    - name: Add Coverage To Pull Request (Gradle)
-      if: ${{ inputs.reporting == 'true' && steps.detect.outputs.tool == 'gradle' && github.event_name == 'pull_request' }}
-      uses: madrapps/jacoco-report@v1.7.2
-      with:
-        paths: ${{ inputs.jacoco-paths-gradle }}
-        token: ${{ inputs.reporting-token }}
-        min-coverage-overall: ${{ inputs.min-coverage-overall }}
-        title: ${{ inputs.coverage-title }}
-        update-comment: true
-
-    - name: Add Coverage To Pull Request (Maven)
-      if: ${{ inputs.reporting == 'true' && steps.detect.outputs.tool == 'maven' && github.event_name == 'pull_request' }}
-      uses: madrapps/jacoco-report@v1.7.2
-      with:
-        paths: ${{ inputs.jacoco-paths-maven }}
-        token: ${{ inputs.reporting-token }}
-        min-coverage-overall: ${{ inputs.min-coverage-overall }}
-        title: ${{ inputs.coverage-title }}
-        update-comment: true
-
-    - name: Publish Test Results (Gradle)
-      if: ${{ inputs.reporting == 'true' && steps.detect.outputs.tool == 'gradle' && always() }}
-      uses: EnricoMi/publish-unit-test-result-action@v2
-      with:
-        files: ${{ inputs.junit-files-gradle }}
-        github_token: ${{ inputs.reporting-token }}
-
-    - name: Publish Test Results (Maven)
-      if: ${{ inputs.reporting == 'true' && steps.detect.outputs.tool == 'maven' && always() }}
-      uses: EnricoMi/publish-unit-test-result-action@v2
-      with:
-        files: ${{ inputs.junit-files-maven }}
-        github_token: ${{ inputs.reporting-token }}
-
-    - name: Upload Test Report
-      if: ${{ inputs.reporting == 'true' && always() }}
-      uses: actions/upload-artifact@v6
+    - name: Upload Java reports
+      if: ${{ inputs.upload-reports == 'true' && always() }}
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
       with:
         name: ${{ inputs.artifact-name }}
         path: ${{ inputs.artifact-paths }}
         if-no-files-found: ignore
+        retention-days: 14

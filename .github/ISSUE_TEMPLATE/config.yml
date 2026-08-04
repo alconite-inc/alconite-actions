@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/alconite-inc/alconite-actions/security/advisories/new
+    about: Privately report a suspected vulnerability.
+  - name: Alconite support
+    url: https://alconite.com
+    about: Contract Guard account, billing, and project-token support.

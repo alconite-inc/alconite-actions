@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Source and metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          package-manager-cache: false
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.25.x"
+          cache: false
+      - name: Install locked development dependencies
+        run: npm ci
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high
+      - name: Verify Contract Guard action and metadata
+        run: npm run verify
+      - name: Verify checked-in JavaScript build
+        run: git diff --exit-code -- dist
+      - name: Install actionlint
+        env:
+          GOBIN: ${{ runner.temp }}/bin
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          echo "$GOBIN" >> "$GITHUB_PATH"
+      - name: Lint workflows and embedded shell
+        run: actionlint -color
+
+  java-action:
+    name: Java action fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./java-ci
+        with:
+          build-tool: maven
+          working-directory: test/fixtures/java
+          upload-reports: "false"
+
+  node-action:
+    name: Node action fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./node-ci
+        with:
+          working-directory: test/fixtures/node
+          upload-reports: "false"
+
+  rust-action:
+    name: Rust action fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./rust-ci
+        with:
+          working-directory: test/fixtures/rust
+
+  docker-action:
+    name: Docker action fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: ./docker-ci
+        with:
+          context: test/fixtures/docker
+          dockerfile: test/fixtures/docker/Dockerfile
+          push: "false"
+          load: "false"
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          languages: javascript-typescript
+      - name: Analyze source
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4

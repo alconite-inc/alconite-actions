@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a reproducible problem in an Alconite action.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include project tokens, registry credentials, private contracts, or other secrets.
+  - type: input
+    id: action
+    attributes:
+      label: Action and version
+      description: Include the action path and exact tag or commit SHA.
+    validations:
+      required: true
+  - type: input
+    id: runner
+    attributes:
+      label: Runner
+      description: For example, ubuntu-24.04 or a self-hosted runner version.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and redacted logs
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+    validations:
+      required: true

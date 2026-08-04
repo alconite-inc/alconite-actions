@@ -1,137 +1,176 @@
-name: Alconite Docker CI
-description: Standard Docker build/push using docker/metadata-action tags and GHA cache.
+name: Alconite Docker Build
+description: Build and optionally publish OCI images with BuildKit caching, metadata, SBOM, and provenance controls.
 
 inputs:
   registry:
-    description: "Container registry host (default ghcr.io)."
+    description: Container registry host.
     required: false
-    default: "ghcr.io"
-
+    default: ghcr.io
   image:
-    description: "Full image name WITHOUT tag. Empty => <registry>/<owner>/<repo>."
+    description: Full image name without a tag. Defaults to registry/owner/repository.
     required: false
     default: ""
-
   dockerfile:
-    description: "Path to Dockerfile."
+    description: Path to the Dockerfile.
     required: false
-    default: "Dockerfile"
-
+    default: Dockerfile
   context:
-    description: "Docker build context."
+    description: Docker build context.
     required: false
-    default: "."
-
+    default: .
   platforms:
-    description: "Comma-separated target platforms; empty uses default runner arch."
+    description: Optional comma-separated target platforms.
     required: false
     default: ""
-
   push:
-    description: "Push mode (auto|true|false). auto pushes on main or tags."
+    description: Publish the image (true or false). Credentials are never used when false.
     required: false
-    default: "auto"
-
+    default: "false"
+  load:
+    description: Load a single-platform image into the local Docker engine (true or false).
+    required: false
+    default: "false"
   registry-username:
-    description: "Registry username for login."
-    required: false
-    default: ${{ github.actor }}
-
-  registry-password:
-    description: "Registry password/token for login."
-    required: true
-
-  release-version:
-    description: "Optional release version (X.Y.Z) to add as an extra docker tag."
+    description: Registry username. Defaults to github.actor.
     required: false
     default: ""
-
-  tag-latest-on-main:
-    description: "Whether to tag 'latest' on main (true|false)."
+  registry-password:
+    description: Registry password or token. Required only when push is true.
+    required: false
+    default: ""
+  release-version:
+    description: Optional SemVer release version used as an additional image tag.
+    required: false
+    default: ""
+  tag-latest:
+    description: Add the latest tag (true or false).
+    required: false
+    default: "false"
+  sbom:
+    description: Generate an SBOM attestation (true or false).
+    required: false
+    default: "false"
+  provenance:
+    description: BuildKit provenance setting, such as false or mode=max.
     required: false
     default: "false"
 
 outputs:
   image:
-    description: "Resolved docker image name without tag."
+    description: Resolved image name without a tag.
     value: ${{ steps.image.outputs.value }}
   tags:
-    description: "Generated docker tag list from metadata-action."
+    description: Generated image tags.
     value: ${{ steps.meta.outputs.tags }}
   labels:
-    description: "Generated docker labels from metadata-action."
+    description: Generated OCI labels.
     value: ${{ steps.meta.outputs.labels }}
+  digest:
+    description: Image digest returned by BuildKit.
+    value: ${{ steps.build.outputs.digest }}
+  metadata:
+    description: Build result metadata JSON.
+    value: ${{ steps.build.outputs.metadata }}
 
 runs:
   using: composite
   steps:
-    - name: Resolve image name
+    - name: Validate Docker inputs
       id: image
       shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        IMAGE_INPUT: ${{ inputs.image }}
+        PUSH_IMAGE: ${{ inputs.push }}
+        LOAD_IMAGE: ${{ inputs.load }}
+        TAG_LATEST: ${{ inputs.tag-latest }}
+        SBOM: ${{ inputs.sbom }}
+        RELEASE_VERSION: ${{ inputs.release-version }}
+        PLATFORMS: ${{ inputs.platforms }}
       run: |
         set -euo pipefail
-        if [[ -n "${{ inputs.image }}" ]]; then
-          echo "value=${{ inputs.image }}" >> "$GITHUB_OUTPUT"
-        else
-          repo="${GITHUB_REPOSITORY,,}"
-          echo "value=${{ inputs.registry }}/$repo" >> "$GITHUB_OUTPUT"
+        for value in "$PUSH_IMAGE" "$LOAD_IMAGE" "$TAG_LATEST" "$SBOM"; do
+          case "$value" in true|false) ;; *) echo "::error::Boolean Docker inputs must be true or false"; exit 1 ;; esac
+        done
+        if [[ ! "$REGISTRY" =~ ^[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]]; then
+          echo "::error::registry must be a hostname with an optional port and no URL scheme"
+          exit 1
         fi
+        if [[ "$PUSH_IMAGE" == "true" && "$LOAD_IMAGE" == "true" ]]; then
+          echo "::error::push and load cannot both be true"
+          exit 1
+        fi
+        if [[ "$LOAD_IMAGE" == "true" && "$PLATFORMS" == *,* ]]; then
+          echo "::error::load supports only one platform"
+          exit 1
+        fi
+        if [[ -n "$RELEASE_VERSION" ]]; then
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          [[ "$RELEASE_VERSION" =~ $semver ]] || { echo "::error::release-version must be valid SemVer"; exit 1; }
+        fi
+        image="$IMAGE_INPUT"
+        if [[ -z "$image" ]]; then image="$REGISTRY/${GITHUB_REPOSITORY,,}"; fi
+        if [[ "$image" == *$'\n'* || "$image" == *$'\r'* || "$image" =~ [[:space:]] ]]; then
+          echo "::error::image must be a single OCI image name without whitespace"
+          exit 1
+        fi
+        image="${image,,}"
+        if [[ ! "$image" =~ ^[a-z0-9.-]+(:[0-9]{1,5})?/[a-z0-9._/-]+$ || "$image" == *//* ]]; then
+          echo "::error::image must be a valid lowercase OCI image name without a tag or digest"
+          exit 1
+        fi
+        printf 'value=%s\n' "$image" >> "$GITHUB_OUTPUT"
 
-    - name: Decide push mode
-      id: pushmode
+    - name: Require registry credentials for publishing
+      if: ${{ inputs.push == 'true' && inputs.registry-password == '' }}
       shell: bash
       run: |
-        set -euo pipefail
-        if [[ "${{ inputs.push }}" == "auto" ]]; then
-          if [[ "${GITHUB_REF}" == "refs/heads/main" || "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "value=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=false" >> "$GITHUB_OUTPUT"
-          fi
-        else
-          echo "value=${{ inputs.push }}" >> "$GITHUB_OUTPUT"
-        fi
+        echo "::error::registry-password is required when push is true"
+        exit 1
 
-    - name: Docker meta (tags + labels)
+    - name: Generate Docker metadata
       id: meta
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
       with:
         images: ${{ steps.image.outputs.value }}
         tags: |
           type=ref,event=branch
+          type=ref,event=pr
           type=ref,event=tag
           type=sha,format=short,prefix=sha-
-          type=semver,pattern={{version}},prefix=,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-          type=semver,pattern={{major}}.{{minor}},prefix=,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-          type=semver,pattern={{major}},prefix=,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-          type=raw,value=latest,enable=${{ inputs.tag-latest-on-main == 'true' && github.ref == 'refs/heads/main' }}
+          type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+          type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+          type=semver,pattern={{major}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
           type=raw,value=${{ inputs.release-version }},enable=${{ inputs.release-version != '' }}
+          type=raw,value=latest,enable=${{ inputs.tag-latest == 'true' }}
 
-    - name: Set up QEMU (multi-arch)
+    - name: Set up QEMU
       if: ${{ inputs.platforms != '' }}
-      uses: docker/setup-qemu-action@v3
+      uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
-    - name: Login to registry
-      uses: docker/login-action@v3
+    - name: Log in to the container registry
+      if: ${{ inputs.push == 'true' }}
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
       with:
         registry: ${{ inputs.registry }}
-        username: ${{ inputs.registry-username }}
+        username: ${{ inputs.registry-username || github.actor }}
         password: ${{ inputs.registry-password }}
 
-    - name: Build (and maybe push)
-      uses: docker/build-push-action@v6
+    - name: Build image
+      id: build
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
       with:
         context: ${{ inputs.context }}
         file: ${{ inputs.dockerfile }}
         platforms: ${{ inputs.platforms }}
-        push: ${{ steps.pushmode.outputs.value }}
+        push: ${{ inputs.push }}
+        load: ${{ inputs.load }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        secrets: |
-          "github_user=${{ github.actor }}"
-          "github_token=${{ inputs.registry-password }}"
+        sbom: ${{ inputs.sbom }}
+        provenance: ${{ inputs.provenance }}

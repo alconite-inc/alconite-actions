@@ -1,0 +1,257 @@
+name: Alconite Stack CI
+
+on:
+  workflow_call:
+    inputs:
+      java:
+        description: Run Java CI (auto, true, or false).
+        type: string
+        default: auto
+      java-version:
+        description: Java version.
+        type: string
+        default: "25"
+      node:
+        description: Run Node CI (auto, true, or false).
+        type: string
+        default: auto
+      node-version:
+        description: Node.js version.
+        type: string
+        default: "24"
+      rust:
+        description: Run Rust CI (auto, true, or false).
+        type: string
+        default: auto
+      docker:
+        description: Build a Docker image (auto, true, or false).
+        type: string
+        default: auto
+      docker-push:
+        description: Publish and attest the Docker image on a trusted non-PR ref.
+        type: boolean
+        default: false
+      docker-image:
+        description: Optional full image name without a tag.
+        type: string
+        default: ""
+      contract-guard:
+        description: Run Contract Guard (auto, true, or false).
+        type: string
+        default: auto
+      contract-guard-project-id:
+        description: Contract Guard project identifier.
+        type: string
+        default: ""
+      contract-candidate-path:
+        description: OpenAPI candidate path.
+        type: string
+        default: openapi.yaml
+      contract-fail-on:
+        description: Contract Guard gate threshold.
+        type: string
+        default: failed
+    secrets:
+      packages-token:
+        description: Optional private dependency token. It is not passed to pull request builds.
+        required: false
+      registry-password:
+        description: Optional registry token. github.token is used when omitted.
+        required: false
+      contract-guard-token:
+        description: Project-scoped alc_cg_ Contract Guard token.
+        required: false
+      discord-webhook:
+        description: Optional Discord webhook.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Detect project capabilities
+    runs-on: ubuntu-24.04
+    outputs:
+      java: ${{ steps.detect.outputs.java }}
+      node: ${{ steps.detect.outputs.node }}
+      rust: ${{ steps.detect.outputs.rust }}
+      docker: ${{ steps.detect.outputs.docker }}
+      contract: ${{ steps.detect.outputs.contract }}
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Detect capabilities
+        id: detect
+        shell: bash
+        env:
+          JAVA_MODE: ${{ inputs.java }}
+          NODE_MODE: ${{ inputs.node }}
+          RUST_MODE: ${{ inputs.rust }}
+          DOCKER_MODE: ${{ inputs.docker }}
+          CONTRACT_MODE: ${{ inputs.contract-guard }}
+          CONTRACT_PROJECT: ${{ inputs.contract-guard-project-id }}
+        run: |
+          set -euo pipefail
+          resolve() {
+            local mode="$1" detected="$2" name="$3"
+            case "$mode" in
+              auto) printf '%s=%s\n' "$name" "$detected" >> "$GITHUB_OUTPUT" ;;
+              true|false) printf '%s=%s\n' "$name" "$mode" >> "$GITHUB_OUTPUT" ;;
+              *) echo "::error::$name must be auto, true, or false"; exit 1 ;;
+            esac
+          }
+          java_detected=false
+          node_detected=false
+          rust_detected=false
+          docker_detected=false
+          contract_detected=false
+          [[ -f gradlew || -f build.gradle || -f build.gradle.kts || -f settings.gradle || -f settings.gradle.kts || -f mvnw || -f pom.xml ]] && java_detected=true
+          [[ -f package.json ]] && node_detected=true
+          [[ -f Cargo.toml ]] && rust_detected=true
+          [[ -f Dockerfile ]] && docker_detected=true
+          [[ -n "$CONTRACT_PROJECT" ]] && contract_detected=true
+          resolve "$JAVA_MODE" "$java_detected" java
+          resolve "$NODE_MODE" "$node_detected" node
+          resolve "$RUST_MODE" "$rust_detected" rust
+          resolve "$DOCKER_MODE" "$docker_detected" docker
+          resolve "$CONTRACT_MODE" "$contract_detected" contract
+
+  java:
+    name: Java CI
+    needs: detect
+    if: ${{ needs.detect.outputs.java == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: alconite-inc/alconite-actions/java-ci@v2.0.0
+        with:
+          java-version: ${{ inputs.java-version }}
+          packages-token: ${{ github.event_name == 'pull_request' && '' || secrets.packages-token }}
+
+  node:
+    name: Node CI
+    needs: detect
+    if: ${{ needs.detect.outputs.node == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: alconite-inc/alconite-actions/node-ci@v2.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          packages-token: ${{ github.event_name == 'pull_request' && '' || secrets.packages-token }}
+
+  rust:
+    name: Rust CI
+    needs: detect
+    if: ${{ needs.detect.outputs.rust == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: alconite-inc/alconite-actions/rust-ci@v2.0.0
+
+  docker-build:
+    name: Docker build
+    needs: detect
+    if: ${{ needs.detect.outputs.docker == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: alconite-inc/alconite-actions/docker-ci@v2.0.0
+        with:
+          image: ${{ inputs.docker-image }}
+          push: "false"
+
+  contract-guard:
+    name: Contract Guard
+    needs: [detect, java, node, rust]
+    if: >-
+      ${{ always() && needs.detect.outputs.contract == 'true' &&
+          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
+          (needs.java.result == 'success' || needs.java.result == 'skipped') &&
+          (needs.node.result == 'success' || needs.node.result == 'skipped') &&
+          (needs.rust.result == 'success' || needs.rust.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: alconite-inc/alconite-actions@v2.0.0
+        with:
+          project-id: ${{ inputs.contract-guard-project-id }}
+          project-token: ${{ secrets.contract-guard-token }}
+          candidate-path: ${{ inputs.contract-candidate-path }}
+          fail-on: ${{ inputs.contract-fail-on }}
+
+  docker-publish:
+    name: Docker publish
+    needs: [detect, java, node, rust, docker-build, contract-guard]
+    if: >-
+      ${{ always() && inputs.docker-push && github.event_name != 'pull_request' &&
+          needs.detect.outputs.docker == 'true' && needs.docker-build.result == 'success' &&
+          (needs.java.result == 'success' || needs.java.result == 'skipped') &&
+          (needs.node.result == 'success' || needs.node.result == 'skipped') &&
+          (needs.rust.result == 'success' || needs.rust.result == 'skipped') &&
+          (needs.contract-guard.result == 'success' || needs.contract-guard.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build and publish image
+        id: image
+        uses: alconite-inc/alconite-actions/docker-ci@v2.0.0
+        with:
+          image: ${{ inputs.docker-image }}
+          push: "true"
+          registry-password: ${{ secrets.registry-password || github.token }}
+          sbom: "true"
+          provenance: mode=max
+      - name: Attest published image
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
+        with:
+          subject-name: ${{ steps.image.outputs.image }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+  notify:
+    name: Notify
+    needs: [java, node, rust, docker-build, contract-guard, docker-publish]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    env:
+      DISCORD_WEBHOOK: ${{ secrets.discord-webhook }}
+    steps:
+      - uses: alconite-inc/alconite-actions/discord-notify@v2.0.0
+        if: ${{ env.DISCORD_WEBHOOK != '' }}
+        with:
+          webhook-url: ${{ env.DISCORD_WEBHOOK }}
+          job-status: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || 'success' }}
