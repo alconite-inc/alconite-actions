@@ -17,7 +17,7 @@ Install actionlint 1.7.7 and run `actionlint` from the repository root to valida
 
 - Keep changes focused and explain any input, output, permission, or security-boundary change.
 - Add or update unit and fixture tests.
-- Rebuild `dist/` and commit it whenever `src/` changes.
+- Rebuild `dist/` and commit it whenever `src/`, TypeScript configuration, or build dependencies change.
 - Pin new external actions to a full verified commit SHA with a release-version comment.
 - Never add a credential to a build step that executes pull request-controlled code.
 - Update `CHANGELOG.md` for user-visible changes.
