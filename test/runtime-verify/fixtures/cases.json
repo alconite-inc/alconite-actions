@@ -1,0 +1,13 @@
+{
+  "publicHealth": { "operationId": "getHealth", "status": 200, "response": "responses/health.json" },
+  "authenticatedGet": { "operationId": "getCustomer", "secretEnvironment": "STAGING_API_AUTHORIZATION" },
+  "pathParameter": { "name": "customerId", "value": "runtime-test-customer" },
+  "queryParameter": { "name": "includeHistory", "value": false },
+  "problemDetails": { "status": 404, "contentType": "application/problem+json", "response": "responses/problem.json" },
+  "undocumentedStatus": { "status": 503, "ruleId": "runtime.response.undocumented-status" },
+  "missingRequiredProperty": { "response": "responses/missing-required-property.json", "ruleId": "runtime.response.required-property-missing" },
+  "invalidContentType": { "contentType": "text/plain", "response": "responses/invalid-content-type.txt", "ruleId": "runtime.response.content-type-mismatch" },
+  "oversizedResponse": { "generatedBytes": 1048577, "ruleId": "runtime.response.too-large" },
+  "timeout": { "ruleId": "runtime.transport.timeout" },
+  "contractHashMismatch": { "ruleId": "runtime.contract.hash-mismatch", "targetCalls": 0 }
+}

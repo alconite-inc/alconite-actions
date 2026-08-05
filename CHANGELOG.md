@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.1.0] - Unreleased
+
+### Added
+
+- Customer-runner `runtime-verify/` Action for explicit GET/HEAD verification against approved OpenAPI 3.0/3.1 contracts.
+- Strict version-one configuration, local JSON Schema validation, bounded observations/findings, deterministic result digests, contract-hash binding, and replay-aware platform submission.
+- Post-deployment reusable Runtime Verify workflow, report artifact preservation, examples, fixtures, and end-to-end mock target/platform coverage.
+
+### Changed
+
+- Added a self-contained Node 24 Runtime Verify distribution while preserving the Contract Guard root Action and every existing component/reusable workflow.
+- Extended CI and release validation to require reproducible Runtime Verify bundles, reviewed dependency licenses, and a bounded bundle size.
+
+### Security
+
+- Target credentials resolve only from explicitly configured runner environment variables and are masked before use.
+- Target response bodies are validated in memory and never uploaded, logged, or written to disk.
+- Remote/filesystem OpenAPI references, mutation methods, cross-origin redirects, unsafe headers, oversized inputs/responses, and unbounded document structures are rejected.
+- Pinned YAML 2.9.0 to include the deeply nested collection stack-overflow fix.
+
 ## [2.0.0] - 2026-08-04
 
 ### Added

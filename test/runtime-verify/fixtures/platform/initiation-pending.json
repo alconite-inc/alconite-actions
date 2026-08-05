@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "alconite.runtime-verify.run.v1",
+  "runId": "rtvrun_fixture",
+  "status": "pending",
+  "expectedContractContentHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "maximumOperations": 25,
+  "replayed": false
+}

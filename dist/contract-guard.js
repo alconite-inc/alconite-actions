@@ -285,7 +285,7 @@ async function runCheck(request, dependencies = {
                     accept: 'application/json',
                     authorization: `Bearer ${request.projectToken}`,
                     'idempotency-key': request.idempotencyKey,
-                    'user-agent': 'alconite-contract-guard-action/2.0.0',
+                    'user-agent': 'alconite-contract-guard-action/2.1.0',
                 },
                 body,
                 redirect: 'manual',
