@@ -1,0 +1,99 @@
+name: Runtime Verify
+
+on:
+  workflow_call:
+    inputs:
+      project-id:
+        description: Contract Guard project identifier.
+        required: true
+        type: string
+      environment-id:
+        description: Runtime Verify environment identifier.
+        required: true
+        type: string
+      check-id:
+        description: Approved Contract Guard check identifier.
+        required: true
+        type: string
+      base-url:
+        description: Customer API HTTPS origin.
+        required: true
+        type: string
+      contract-path:
+        description: Path to the approved OpenAPI contract.
+        required: false
+        default: openapi.yaml
+        type: string
+      configuration-path:
+        description: Path to the Runtime Verify configuration.
+        required: false
+        default: .alconite/runtime-verify.yaml
+        type: string
+      display-name:
+        description: Optional verification label.
+        required: false
+        default: ""
+        type: string
+      deployment-id:
+        description: Optional deployment identifier.
+        required: false
+        default: ""
+        type: string
+      fail-on:
+        description: Gate threshold (failed, warnings, or never).
+        required: false
+        default: failed
+        type: string
+    secrets:
+      project-token:
+        description: Project-scoped Runtime Verify token.
+        required: true
+    outputs:
+      run-id:
+        description: Stable Runtime Verify run identifier.
+        value: ${{ jobs.runtime.outputs.run-id }}
+      gate-result:
+        description: Platform-computed gate result.
+        value: ${{ jobs.runtime.outputs.gate-result }}
+      report-url:
+        description: Canonical Alconite report URL.
+        value: ${{ jobs.runtime.outputs.report-url }}
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04
+    outputs:
+      run-id: ${{ steps.verify.outputs.run-id }}
+      gate-result: ${{ steps.verify.outputs.gate-result }}
+      report-url: ${{ steps.verify.outputs.report-url }}
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify deployed API
+        id: verify
+        uses: alconite-inc/alconite-actions/runtime-verify@v2.1.0
+        with:
+          project-id: ${{ inputs.project-id }}
+          project-token: ${{ secrets.project-token }}
+          environment-id: ${{ inputs.environment-id }}
+          check-id: ${{ inputs.check-id }}
+          base-url: ${{ inputs.base-url }}
+          contract-path: ${{ inputs.contract-path }}
+          configuration-path: ${{ inputs.configuration-path }}
+          display-name: ${{ inputs.display-name }}
+          deployment-id: ${{ inputs.deployment-id }}
+          fail-on: ${{ inputs.fail-on }}
+
+      - name: Preserve Runtime Verify report
+        if: ${{ always() && steps.verify.outputs.report-path != '' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: runtime-verify-report
+          path: ${{ steps.verify.outputs.report-path }}
+          if-no-files-found: error

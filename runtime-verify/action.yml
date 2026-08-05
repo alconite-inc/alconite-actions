@@ -1,0 +1,102 @@
+name: Alconite Runtime Verify
+author: Alconite Engineering
+description: Verify a deployed API locally against an approved OpenAPI contract and submit bounded results to Alconite.
+
+branding:
+  icon: activity
+  color: blue
+
+inputs:
+  project-id:
+    description: Stable Contract Guard project identifier beginning with cgprj_.
+    required: true
+  project-token:
+    description: Project-scoped Runtime Verify bearer token beginning with alc_cg_.
+    required: true
+  environment-id:
+    description: Stable Runtime Verify environment identifier beginning with rtvenv_.
+    required: true
+  check-id:
+    description: Contract Guard check identifier that approved the selected contract.
+    required: true
+  base-url:
+    description: HTTPS origin for the customer API tested from this runner.
+    required: true
+  contract-path:
+    description: Workspace-relative path to the approved OpenAPI 3.0 or 3.1 JSON, YAML, or YML contract.
+    required: false
+    default: openapi.yaml
+  configuration-path:
+    description: Workspace-relative path to the strict Runtime Verify version-one configuration.
+    required: false
+    default: .alconite/runtime-verify.yaml
+  display-name:
+    description: Optional human-readable verification label.
+    required: false
+    default: ""
+  deployment-id:
+    description: Optional release or deployment identifier.
+    required: false
+    default: ""
+  api-url:
+    description: Alconite Platform API origin.
+    required: false
+    default: https://alconite.com
+  idempotency-key:
+    description: Optional key for one logical run; a deterministic versioned key is derived when omitted.
+    required: false
+    default: ""
+  timeout-seconds:
+    description: Bounded total target-execution timeout in seconds.
+    required: false
+    default: "120"
+  retry-attempts:
+    description: Total Alconite attempts for network errors and transient 502, 503, or 504 responses.
+    required: false
+    default: "3"
+  fail-on:
+    description: Gate threshold (failed, warnings, or never); processing and platform errors always fail.
+    required: false
+    default: failed
+  report-path:
+    description: Optional local path for the canonical report; defaults to RUNNER_TEMP.
+    required: false
+    default: ""
+
+outputs:
+  run-id:
+    description: Stable Runtime Verify run identifier.
+  project-id:
+    description: Stable Contract Guard project identifier.
+  environment-id:
+    description: Stable Runtime Verify environment identifier.
+  check-id:
+    description: Contract Guard check identifier linked to the run.
+  status:
+    description: Durable Runtime Verify report status.
+  gate-result:
+    description: Platform-computed gate result.
+  report-url:
+    description: Canonical Alconite report URL.
+  report-path:
+    description: Local path containing the canonical JSON report.
+  contract-content-hash:
+    description: SHA-256 hash of the exact checked-in contract bytes.
+  configured-operations:
+    description: Number of explicitly configured operations.
+  executed-operations:
+    description: Number of target operations executed.
+  passed-operations:
+    description: Number of passing operations.
+  failed-operations:
+    description: Number of failing operations.
+  warning-operations:
+    description: Number of operations with warnings.
+  finding-count:
+    description: Number of bounded findings.
+  replayed:
+    description: Whether Alconite replayed an existing run.
+
+runs:
+  using: node24
+  main: dist/index.js

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "alconite.runtime-verify.report.v1",
+  "runId": "rtvrun_fixture",
+  "projectId": "cgprj_fixture",
+  "environmentId": "rtvenv_fixture",
+  "contractGuardCheckId": "cgchk_fixture",
+  "status": "completed",
+  "gateResult": "passed",
+  "contractContentHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expectedContractContentHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "summary": {
+    "configuredOperations": 1,
+    "executedOperations": 1,
+    "passedOperations": 1,
+    "failedOperations": 0,
+    "warningOperations": 0,
+    "findingCount": 0
+  },
+  "findings": [],
+  "reportUrl": "/api/v1/runtime-verify/projects/cgprj_fixture/runs/rtvrun_fixture/report"
+}

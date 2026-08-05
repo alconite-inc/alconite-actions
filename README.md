@@ -1,6 +1,6 @@
 # Alconite Actions
 
-Production-oriented GitHub Actions for [Alconite Contract Guard](https://alconite.com) and repeatable Java, Node.js, Rust, and Docker CI.
+Production-oriented GitHub Actions for [Alconite Contract Guard](https://alconite.com), Alconite Runtime Verify, and repeatable Java, Node.js, Rust, and Docker CI.
 
 Version 2 makes Contract Guard the public root action. It uploads an OpenAPI candidate, receives the completed deterministic release-gate report, writes a GitHub job summary, exposes bounded outputs, and fails the step when the configured policy threshold is reached.
 
@@ -77,6 +77,157 @@ The current API completes checks synchronously. A failed policy gate is therefor
 ### Outputs
 
 The action exposes `check-id`, `project-id`, `status`, `gate-result`, `report-url`, `report-path`, baseline/candidate/upload hashes, `breaking-changes`, `risky-changes`, `policy-failures`, and `policy-warnings`. The full report is written to `report-path` rather than placed in a workflow output.
+
+## Runtime Verify
+
+Runtime Verify is an additive component Action planned for the next minor release. The repository root remains Contract Guard; Runtime Verify is selected explicitly with:
+
+```yaml
+uses: alconite-inc/alconite-actions/runtime-verify@v2.1.0
+```
+
+The `v2.1.0` reference in this section is the intended release reference and does not claim that the release has already been published.
+
+The Alconite platform never calls the target API. Requests execute inside the customer-controlled GitHub runner. The Action reads the checked-in contract and `.alconite/runtime-verify.yaml`, resolves only explicitly named target secrets from the runner environment, calls the configured target, validates responses locally, and submits a bounded observation/finding envelope. Target origins, expanded request URLs, authorization values, cookies, response bodies, response header values, environment values, local paths, GitHub tokens, and stack traces are not submitted.
+
+The referenced Contract Guard `check-id` identifies the approved candidate. Runtime Verify hashes the exact local contract bytes as `sha256:<hex>` and compares that value with `expectedContractContentHash` returned by Alconite before any target request. A mismatch skips target execution and completes with `runtime.contract.hash-mismatch`; the platform still computes the gate result.
+
+### Runtime Verify setup
+
+1. In Contract Guard, create or select the API project and promote an approved baseline.
+2. Create a Runtime Verify environment for the deployed target and record its `rtvenv_` identifier.
+3. Create a project token scoped to Runtime Verify initiation, result submission, and failure reporting for that project/environment. Store it as `ALCONITE_RUNTIME_VERIFY_TOKEN`.
+4. Store the project and environment identifiers as `ALCONITE_CONTRACT_GUARD_PROJECT_ID` and `ALCONITE_RUNTIME_ENVIRONMENT_ID` repository variables.
+5. Store target credentials as repository or environment secrets. Map them to the exact uppercase environment names referenced by the checked-in configuration.
+
+Target credentials are not Action inputs. For example:
+
+```yaml
+env:
+  STAGING_API_AUTHORIZATION: ${{ secrets.STAGING_API_AUTHORIZATION }}
+```
+
+GitHub does not ordinarily provide secrets to workflows triggered from forks. Keep Runtime Verify in a trusted post-deployment job, and do not weaken fork secret protections.
+
+### Configuration
+
+The strict version-one format supports only `version`, `defaults`, and `operations`. Every operation must name exactly one approved OpenAPI `operationId`; only `GET` and `HEAD` are executable.
+
+```yaml
+version: 1
+
+defaults:
+  timeoutSeconds: 10
+  maximumResponseBytes: 1048576
+  followRedirects: false
+
+operations:
+  - operationId: getPlatformHealth
+    expect:
+      statuses: [200]
+
+  - operationId: getCustomer
+    pathParameters:
+      customerId: runtime-test-customer
+    queryParameters:
+      includeHistory: "false"
+    headers:
+      Authorization:
+        fromEnvironment: STAGING_API_AUTHORIZATION
+    expect:
+      statuses: [200]
+      contentTypes:
+        - application/json
+      requiredHeaders:
+        - X-Request-Id
+```
+
+See [examples/runtime-verify.yaml](examples/runtime-verify.yaml) for a complete example. Configuration expectations may narrow documented statuses and media types but cannot expand the approved contract. Header environment names use a strict uppercase identifier; unsafe hop-by-hop and host headers are rejected. Redirects are disabled by default and, when enabled, are limited to three same-origin hops.
+
+OpenAPI 3.0 and 3.1 JSON/YAML are supported. Local in-document `$ref` values are supported. Remote HTTP/HTTPS references, filesystem references, multi-file bundles, unsupported versions, excessive size/depth/schema/operation counts, and unbounded reference chains are rejected. Response schemas are evaluated with the appropriate OpenAPI 3.0 or JSON Schema 2020-12 semantics.
+
+Runtime findings—such as an undocumented status, invalid JSON, schema mismatch, oversized response, timeout, or unreachable target—complete normally and are submitted for platform policy evaluation. Configuration, parser, authentication, platform, and internal runner failures fail the Action regardless of `fail-on`; after initiation, the Action sends only a safe failure code and bounded message. `fail-on: never` suppresses only platform gate failures.
+
+### Inputs and outputs
+
+Required inputs are `project-id`, `project-token`, `environment-id`, `check-id`, and `base-url`. Optional inputs are `contract-path`, `configuration-path`, `display-name`, `deployment-id`, `api-url`, `idempotency-key`, `timeout-seconds`, `retry-attempts`, `fail-on`, and `report-path`. The defaults are documented in [runtime-verify/action.yml](runtime-verify/action.yml).
+
+Outputs are `run-id`, `project-id`, `environment-id`, `check-id`, `status`, `gate-result`, `report-url`, `report-path`, `contract-content-hash`, operation counts, `finding-count`, and `replayed`. Complete findings are never placed in outputs. The platform canonical report is written to `report-path` for artifact upload, and the job summary displays at most 25 escaped findings.
+
+When `idempotency-key` is omitted, the Action derives a bounded `runtime-gh-v1-` key from the workflow run, project/environment/check identifiers, exact contract/configuration hashes, and deployment identifier. Only network failures and HTTP 502/503/504 responses are retried, with the same key. A replayed completed run skips target execution.
+
+### Complete deploy-and-verify workflow
+
+```yaml
+name: Deploy and verify
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    outputs:
+      contract-check-id: ${{ steps.contract.outputs.check-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify contract compatibility
+        id: contract
+        uses: alconite-inc/alconite-actions@v2.1.0
+        with:
+          project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
+          project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
+          candidate-path: openapi/openapi.yaml
+
+      - name: Deploy staging
+        run: ./deployment/deploy-staging.sh
+
+      - name: Verify staging implementation
+        id: runtime
+        uses: alconite-inc/alconite-actions/runtime-verify@v2.1.0
+        env:
+          STAGING_API_AUTHORIZATION: ${{ secrets.STAGING_API_AUTHORIZATION }}
+        with:
+          project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
+          project-token: ${{ secrets.ALCONITE_RUNTIME_VERIFY_TOKEN }}
+          environment-id: ${{ vars.ALCONITE_RUNTIME_ENVIRONMENT_ID }}
+          check-id: ${{ steps.contract.outputs.check-id }}
+          base-url: https://staging.example.com
+          contract-path: openapi/openapi.yaml
+          configuration-path: .alconite/runtime-verify.yaml
+
+      - name: Preserve Runtime Verify report
+        if: ${{ always() && steps.runtime.outputs.report-path != '' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: runtime-verify-report
+          path: ${{ steps.runtime.outputs.report-path }}
+```
+
+The reusable [Runtime Verify workflow](.github/workflows/runtime-verify.yml) is suitable for public/unauthenticated target operations and exposes the run ID, gate result, and report URL. It intentionally accepts only the Alconite project token and no arbitrary target-secret map. Because a caller cannot attach arbitrary job-level environment variables to a reusable-workflow job, authenticated target checks should use the component Action directly as shown above, where each configured target secret is mapped explicitly with `env:`.
+
+```yaml
+jobs:
+  runtime:
+    uses: alconite-inc/alconite-actions/.github/workflows/runtime-verify.yml@v2.1.0
+    with:
+      project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
+      environment-id: ${{ vars.ALCONITE_RUNTIME_ENVIRONMENT_ID }}
+      check-id: ${{ needs.contract.outputs.check-id }}
+      base-url: https://staging.example.com
+      contract-path: openapi/openapi.yaml
+      configuration-path: .alconite/runtime-verify.yaml
+    secrets:
+      project-token: ${{ secrets.ALCONITE_RUNTIME_VERIFY_TOKEN }}
+```
+
+The runner uses `POST /api/v1/runtime-verify/projects/{project_id}/runs`, `/runs/{run_id}/results`, and `/runs/{run_id}/failure`. The submitted result schema is `alconite.runtime-verify.runner-result.v1`; Alconite, not the Action, determines the final gate result.
 
 ## Organization-wide stack workflow
 

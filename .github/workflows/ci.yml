@@ -38,14 +38,14 @@ jobs:
         run: npm ci
       - name: Audit npm dependencies
         run: npm audit --audit-level=high
-      - name: Verify Contract Guard action and metadata
+      - name: Verify source, tests, actions, dependencies, and distributions
         run: npm run verify
-      - name: Verify checked-in JavaScript build
+      - name: Verify checked-in JavaScript builds
         shell: bash
         run: |
-          if ! git diff --quiet -- dist; then
-            echo "::error::dist/ is stale. Run 'npm run build' with the locked dependencies and commit the generated files."
-            git diff --name-only -- dist
+          if ! git diff --quiet -- dist runtime-verify/dist; then
+            echo "::error::A checked-in distribution is stale. Run 'npm run build' with the locked dependencies and commit the generated files."
+            git diff --name-only -- dist runtime-verify/dist
             exit 1
           fi
       - name: Install actionlint

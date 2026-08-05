@@ -1,0 +1,35 @@
+# Alconite Runtime Verify configuration version 1.
+version: 1
+
+defaults:
+  timeoutSeconds: 10
+  maximumResponseBytes: 1048576
+  followRedirects: false
+
+operations:
+  # Public, unauthenticated JSON health endpoint.
+  - operationId: getPlatformHealth
+    expect:
+      statuses: [200]
+      contentTypes:
+        - application/json
+
+  # Authenticated GET with explicit path/query values. The secret remains in the
+  # runner and is supplied through the workflow environment.
+  - operationId: getCustomer
+    pathParameters:
+      customerId: runtime-test-customer
+    queryParameters:
+      includeHistory: "false"
+    headers:
+      Authorization:
+        fromEnvironment: STAGING_API_AUTHORIZATION
+      X-Test-Tenant:
+        value: qe
+    expect:
+      statuses: [200]
+      contentTypes:
+        - application/json
+        - application/problem+json
+      requiredHeaders:
+        - X-Request-Id

@@ -1,0 +1,21 @@
+version: 1
+defaults:
+  timeoutSeconds: 2
+  maximumResponseBytes: 65536
+  followRedirects: false
+operations:
+  - operationId: getHealth
+    expect:
+      statuses: [200]
+      contentTypes: [application/json]
+      requiredHeaders: [X-Request-Id]
+  - operationId: getCustomer
+    pathParameters:
+      customerId: runtime-test-customer
+    queryParameters:
+      includeHistory: false
+    headers:
+      Authorization:
+        fromEnvironment: STAGING_API_AUTHORIZATION
+    expect:
+      statuses: [200]
