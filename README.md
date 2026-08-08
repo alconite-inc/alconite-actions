@@ -80,7 +80,7 @@ The action exposes `check-id`, `project-id`, `status`, `gate-result`, `report-ur
 
 ## Runtime Verify
 
-Runtime Verify is an additive component Action planned for the next minor release. The repository root remains Contract Guard; Runtime Verify is selected explicitly with:
+Runtime Verify is an additive component Action in the 2.1 release line. The repository root remains Contract Guard; Runtime Verify is selected explicitly with:
 
 ```yaml
 uses: alconite-inc/alconite-actions/runtime-verify@v2.1.1
