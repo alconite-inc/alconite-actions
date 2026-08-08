@@ -83,10 +83,10 @@ The action exposes `check-id`, `project-id`, `status`, `gate-result`, `report-ur
 Runtime Verify is an additive component Action in the 2.1 release line. The repository root remains Contract Guard; Runtime Verify is selected explicitly with:
 
 ```yaml
-uses: alconite-inc/alconite-actions/runtime-verify@v2.1.1
+uses: alconite-inc/alconite-actions/runtime-verify@v2.1.2
 ```
 
-Runtime Verify from `v2.1.0` is deprecated because its runner and report envelopes do not match the published Alconite Platform contract. Use `v2.1.1` or newer. The Contract Guard root Action in `v2.1.0` is unaffected.
+Runtime Verify from `v2.1.0` is deprecated because its runner and report envelopes do not match the published Alconite Platform contract. Use `v2.1.2` for the current compatibility and pending-run cleanup fixes. The Contract Guard root Action in `v2.1.0` is unaffected, and Runtime Verify `v2.1.1` remains compatible but is superseded.
 
 The Alconite platform never calls the target API. Requests execute inside the customer-controlled GitHub runner. The Action reads the checked-in contract and `.alconite/runtime-verify.yaml`, resolves only explicitly named target secrets from the runner environment, calls the configured target, validates responses locally, and submits a bounded observation/finding envelope. Target origins, expanded request URLs, authorization values, cookies, response bodies, response header values, environment values, local paths, GitHub tokens, and stack traces are not submitted.
 
@@ -179,7 +179,7 @@ jobs:
 
       - name: Verify contract compatibility
         id: contract
-        uses: alconite-inc/alconite-actions@v2.1.1
+        uses: alconite-inc/alconite-actions@v2.1.2
         with:
           project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
           project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
@@ -190,7 +190,7 @@ jobs:
 
       - name: Verify staging implementation
         id: runtime
-        uses: alconite-inc/alconite-actions/runtime-verify@v2.1.1
+        uses: alconite-inc/alconite-actions/runtime-verify@v2.1.2
         env:
           STAGING_API_AUTHORIZATION: ${{ secrets.STAGING_API_AUTHORIZATION }}
         with:
@@ -215,7 +215,7 @@ The reusable [Runtime Verify workflow](.github/workflows/runtime-verify.yml) is 
 ```yaml
 jobs:
   runtime:
-    uses: alconite-inc/alconite-actions/.github/workflows/runtime-verify.yml@v2.1.1
+    uses: alconite-inc/alconite-actions/.github/workflows/runtime-verify.yml@v2.1.2
     with:
       project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
       environment-id: ${{ vars.ALCONITE_RUNTIME_ENVIRONMENT_ID }}

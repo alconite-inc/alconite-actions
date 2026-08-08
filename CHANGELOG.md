@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.1.2] - 2026-08-08
+
+### Fixed
+
+- Release a safely identified pending run when initiation-response validation fails so usage is not left reserved until maintenance expiration.
+
+### Documentation
+
+- Clarified the Runtime Verify release compatibility guidance and recommended version.
+
 ## [2.1.1] - 2026-08-08
 
 ### Fixed
@@ -10,11 +20,10 @@ All notable changes to this project are documented in this file.
 - Read operation limits from the platform's bounded `limits` object and submit sanitized observations and stable finding fingerprints without response-body hashes.
 - Accept server-generated informational findings, policy violations, immutable finding identities, and nested approved/local contract metadata.
 - Added the official redirect-rejection and content-encoding finding rules to the synchronized runner contract.
-- Released a safely identified pending run when initiation-response validation fails so usage is not left reserved until maintenance expiration.
 
 ### Compatibility
 
-- Runtime Verify from `v2.1.0` is deprecated because its wire model predates the released platform contract. Consumers should move to `v2.1.1`; the Contract Guard root Action in `v2.1.0` is unaffected.
+- Runtime Verify from `v2.1.0` is deprecated because its wire model predates the released platform contract. Consumers should move to `v2.1.1` or newer; the Contract Guard root Action in `v2.1.0` is unaffected.
 
 ## [2.1.0] - 2026-08-05
 
