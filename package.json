@@ -1,6 +1,6 @@
 {
   "name": "@alconite/contract-guard-action",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "GitHub Action for Alconite Contract Guard release checks",
   "private": true,
   "engines": {

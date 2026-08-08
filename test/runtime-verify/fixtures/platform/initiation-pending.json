@@ -1,8 +1,30 @@
 {
-  "schemaVersion": "alconite.runtime-verify.run.v1",
-  "runId": "rtvrun_fixture",
+  "runId": "rtvrun_33333333333333333333333333333333",
   "status": "pending",
+  "replayed": false,
   "expectedContractContentHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "maximumOperations": 25,
-  "replayed": false
+  "policyRevision": 1,
+  "policy": {
+    "requireApprovedContractCheck": true,
+    "failOnContractHashMismatch": true,
+    "failOnUndocumentedStatus": true,
+    "failOnContentTypeMismatch": true,
+    "failOnSchemaViolation": true,
+    "failOnMissingRequiredHeader": true,
+    "failOnUnreachableOperation": true,
+    "failOnTimeout": true,
+    "requireAllConfiguredOperations": true,
+    "maximumFailedOperations": 0,
+    "maximumWarnings": 10,
+    "maximumOperationDurationMilliseconds": 5000
+  },
+  "limits": {
+    "maximumOperations": 100,
+    "maximumFindings": 1000,
+    "maximumResultBytes": 5242880,
+    "maximumResponseBytes": 1048576
+  },
+  "expiresAt": "2026-08-05T15:00:00Z",
+  "reportUrl": "/api/v1/runtime-verify/projects/cgprj_44444444444444444444444444444444/runs/rtvrun_33333333333333333333333333333333/report",
+  "report": null
 }

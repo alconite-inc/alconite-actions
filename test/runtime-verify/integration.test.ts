@@ -33,6 +33,11 @@ interface ScenarioResult {
 
 const projectToken = 'alc_cg_plaintext_example';
 const targetSecret = 'Bearer super-secret';
+const projectId = 'cgprj_44444444444444444444444444444444';
+const environmentId = 'rtvenv_11111111111111111111111111111111';
+const checkId = 'cgchk_22222222222222222222222222222222';
+const runId = 'rtvrun_33333333333333333333333333333333';
+const versionId = 'cgver_55555555555555555555555555555555';
 
 async function listen(server: Server): Promise<URL> {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -69,6 +74,63 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
   let initiation: any;
   const localHash = sha256(Buffer.from(contractText));
   const expectedHash = scenario.expectedHash ?? localHash;
+  const canonicalReport = (body: any, selectedGate?: Scenario['gateResult']) => {
+    const submitted = (body.findings ?? []).map((item: any, index: number) => ({
+      id: `rtvfnd_${(index + 1).toString(16).padStart(32, '0')}`,
+      runId,
+      fingerprint: item.fingerprint,
+      operationId: item.operationId ?? null,
+      method: item.method ?? null,
+      pathTemplate: item.pathTemplate ?? null,
+      classification: item.classification,
+      ruleId: item.ruleId,
+      summary: item.summary,
+      explanation: item.explanation,
+      guidance: item.guidance,
+      location: item.location ?? null,
+      expected: item.expected ?? null,
+      actual: item.actual ?? null,
+      durationMilliseconds: item.durationMilliseconds ?? null,
+      createdAt: 1_785_940_262
+    }));
+    if (!body.contract.matchedApprovedCandidate) {
+      submitted.push({
+        id: 'rtvfnd_ffffffffffffffffffffffffffffffff', runId,
+        fingerprint: `sha256:${'b'.repeat(64)}`, operationId: null, method: null, pathTemplate: null,
+        classification: 'failure', ruleId: 'runtime.contract.hash-mismatch',
+        summary: 'Local contract does not match the approved candidate',
+        explanation: 'The runner contract fingerprint differs from the approved candidate.',
+        guidance: 'Use the exact approved contract.', location: null,
+        expected: 'approved candidate fingerprint', actual: 'different local fingerprint',
+        durationMilliseconds: null, createdAt: 1_785_940_262
+      });
+    }
+    const gateResult = selectedGate ?? (submitted.some((item: any) => item.classification === 'failure') ? 'failed' : 'passed');
+    return {
+      schema: 'alconite.runtime-verify.report.v1', runId, projectId, environmentId, contractGuardCheckId: checkId,
+      status: 'completed', gateResult, policyRevision: 1,
+      contract: {
+        approvedCandidateVersionId: versionId,
+        approvedCandidateContentHash: expectedHash,
+        localContractContentHash: body.contract.localContentHash,
+        hashMatched: body.contract.matchedApprovedCandidate
+      },
+      deployment: {
+        provider: 'github-actions', repository: 'owner/repository', commitSha: 'abc', ref: 'refs/heads/main', workflow: 'Deploy',
+        workflowRunId: '123', workflowRunAttempt: 1, releaseIdentifier: null
+      },
+      runner: { name: 'alconite-runtime-verify-action', version: '2.1.1', operatingSystem: 'Linux', architecture: 'X64' },
+      summary: {
+        ...body.execution,
+        informationalFindings: submitted.filter((item: any) => item.classification === 'informational').length
+      },
+      violations: gateResult === 'failed' ? [{ code: 'runtime_conformance_failure', message: 'Runtime findings violate policy.', failure: true }] : [],
+      findings: submitted,
+      createdAt: 1_785_940_200,
+      completedAt: 1_785_940_262,
+      reportUrl: `/api/v1/runtime-verify/projects/${projectId}/runs/${runId}/report`
+    };
+  };
   const platformServer = createServer((request, reply) => {
     const chunks: Buffer[] = [];
     request.on('data', chunk => chunks.push(Buffer.from(chunk)));
@@ -78,34 +140,24 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
       if (request.url?.endsWith('/failure')) { failureCalls += 1; reply.end('{}'); return; }
       if (request.url?.endsWith('/results')) {
         resultCalls += 1; uploadedResult = body;
-        const findings = body.findings ?? [];
-        const gateResult = scenario.gateResult ?? (findings.some((item: any) => item.classification === 'failure') ? 'failed' : 'passed');
-        reply.end(JSON.stringify({
-          schemaVersion: 'alconite.runtime-verify.report.v1', runId: 'rtvrun_integration', projectId: 'cgprj_integration',
-          environmentId: 'rtvenv_integration', contractGuardCheckId: 'cgchk_integration', status: 'completed', gateResult,
-          contractContentHash: localHash, expectedContractContentHash: expectedHash,
-          summary: {
-            configuredOperations: 1, executedOperations: body.observations.length,
-            passedOperations: body.observations.filter((item: any) => item.outcome === 'passed').length,
-            failedOperations: body.observations.filter((item: any) => item.outcome === 'failed').length,
-            warningOperations: body.observations.filter((item: any) => item.outcome === 'warning').length,
-            findingCount: findings.length
-          }, findings, reportUrl: '/runtime-verify/report'
-        }));
+        reply.end(JSON.stringify(canonicalReport(body, scenario.gateResult)));
         return;
       }
       initiation = body;
-      const replayReport = {
-        schemaVersion: 'alconite.runtime-verify.report.v1', runId: 'rtvrun_integration', projectId: 'cgprj_integration',
-        environmentId: 'rtvenv_integration', contractGuardCheckId: 'cgchk_integration', status: 'completed', gateResult: 'passed',
-        contractContentHash: localHash, expectedContractContentHash: localHash,
-        summary: { configuredOperations: 1, executedOperations: 1, passedOperations: 1, failedOperations: 0, warningOperations: 0, findingCount: 0 },
-        findings: [], reportUrl: '/runtime-verify/report'
-      };
+      const replayReport = canonicalReport({
+        contract: { localContentHash: localHash, matchedApprovedCandidate: true },
+        execution: {
+          configuredOperations: 1, executedOperations: 1, passedOperations: 1, failedOperations: 0,
+          warningOperations: 0, totalDurationMilliseconds: 1
+        },
+        findings: []
+      }, 'passed');
       reply.end(JSON.stringify(scenario.replay
-        ? { schemaVersion: 'alconite.runtime-verify.run.v1', runId: 'rtvrun_integration', status: 'completed', expectedContractContentHash: localHash, replayed: true, report: replayReport }
-        : { schemaVersion: 'alconite.runtime-verify.run.v1', runId: 'rtvrun_integration', status: 'pending', expectedContractContentHash: expectedHash,
-            ...(scenario.maximumOperations === undefined ? {} : { maximumOperations: scenario.maximumOperations }) }));
+        ? { runId, status: 'completed', expectedContractContentHash: localHash, replayed: true,
+            limits: { maximumOperations: 100, maximumFindings: 500, maximumResultBytes: 5_242_880, maximumResponseBytes: 1_048_576 }, report: replayReport }
+        : { runId, status: 'pending', expectedContractContentHash: expectedHash, replayed: false,
+            limits: { maximumOperations: scenario.maximumOperations ?? 100, maximumFindings: 500, maximumResultBytes: 5_242_880, maximumResponseBytes: 1_048_576 },
+            report: null }));
     });
   });
   const platformUrl = await listen(platformServer);
@@ -116,8 +168,8 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
         ...process.env, GITHUB_WORKSPACE: directory, RUNNER_TEMP: directory, GITHUB_OUTPUT: outputPath, GITHUB_STEP_SUMMARY: summaryPath,
         GITHUB_REPOSITORY: 'owner/repository', GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1', GITHUB_SHA: 'abc',
         GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW: 'Deploy', RUNNER_OS: 'Linux', RUNNER_ARCH: 'X64',
-        'INPUT_PROJECT-ID': 'cgprj_integration', 'INPUT_PROJECT-TOKEN': projectToken,
-        'INPUT_ENVIRONMENT-ID': 'rtvenv_integration', 'INPUT_CHECK-ID': 'cgchk_integration',
+        'INPUT_PROJECT-ID': projectId, 'INPUT_PROJECT-TOKEN': projectToken,
+        'INPUT_ENVIRONMENT-ID': environmentId, 'INPUT_CHECK-ID': checkId,
         'INPUT_BASE-URL': targetUrl.toString(), 'INPUT_CONTRACT-PATH': 'openapi.yaml', 'INPUT_CONFIGURATION-PATH': 'runtime.yaml',
         'INPUT_API-URL': platformUrl.toString(), 'INPUT_FAIL-ON': scenario.failOn ?? 'failed', 'INPUT_RETRY-ATTEMPTS': '1',
         'INPUT_REPORT-PATH': reportPath, STAGING_API_AUTHORIZATION: targetSecret
@@ -144,7 +196,9 @@ test('end-to-end passing action writes safe outputs, summary, and canonical repo
   assert.match(result.output, /gate-result<<[^\n]+\npassed\n/);
   assert.match(result.output, /report-path<<[^\n]+\n/);
   assert.match(result.summary, /Alconite Runtime Verify/);
-  assert.equal(result.report?.runId, 'rtvrun_integration');
+  assert.equal(result.report?.runId, runId);
+  assert.equal(result.uploadedResult?.schema, 'alconite.runtime-verify.runner-result.v1');
+  assert.equal(Object.hasOwn(result.uploadedResult ?? {}, 'schemaVersion'), false);
   assert.equal(Object.hasOwn(result.initiation ?? {}, 'baseUrl'), false);
   assert.equal(JSON.stringify(result.initiation).includes('127.0.0.1'), false);
   assert.equal(JSON.stringify(result.uploadedResult).includes(targetSecret), false);
@@ -167,7 +221,9 @@ test('contract hash mismatch skips the target and completes as a runtime finding
   const result = await runScenario({ expectedHash: `sha256:${'b'.repeat(64)}`, failOn: 'never' });
   assert.equal(result.exitCode, 0);
   assert.equal(result.targetCalls, 0);
-  assert.equal(result.uploadedResult?.findings[0]?.ruleId, 'runtime.contract.hash-mismatch');
+  assert.equal(result.uploadedResult?.contract.matchedApprovedCandidate, false);
+  assert.equal(result.uploadedResult?.observations[0]?.outcome, 'not_executed');
+  assert.equal(result.report?.findings[0]?.ruleId, 'runtime.contract.hash-mismatch');
 });
 
 test('completed replay skips both target execution and result submission', async () => {
@@ -177,10 +233,11 @@ test('completed replay skips both target execution and result submission', async
   assert.match(result.output, /replayed<<[^\n]+\ntrue\n/);
 });
 
-test('runner processing failures call the safe failure endpoint', async () => {
+test('invalid platform limits fail before target execution without a spurious failure upload', async () => {
   const result = await runScenario({ maximumOperations: 0 });
   assert.equal(result.exitCode, 1);
-  assert.equal(result.targetCalls, 0); assert.equal(result.failureCalls, 1);
+  assert.equal(result.targetCalls, 0); assert.equal(result.failureCalls, 0);
+  assert.match(`${result.stdout}\n${result.output}`, /limits\.maximumOperations/);
   assert.doesNotMatch(result.stderr, /super-secret/);
 });
 

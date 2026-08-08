@@ -34,7 +34,7 @@ test('executes a passing JSON response entirely in the runner', async t => {
   });
   const result = await executePlan(contract, [plan()], baseUrl, defaults);
   assert.equal(result.observations[0]?.outcome, 'passed');
-  assert.match(result.observations[0]?.responseBodyHash ?? '', /^sha256:/);
+  assert.equal(Object.hasOwn(result.observations[0] ?? {}, 'responseBodyHash'), false);
   assert.deepEqual(result.findings, []);
 });
 

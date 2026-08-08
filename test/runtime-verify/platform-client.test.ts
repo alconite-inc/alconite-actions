@@ -1,26 +1,48 @@
 import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import test, { type TestContext } from 'node:test';
-import { RuntimeVerifyPlatformClient, type InitiationRequest } from '../../src/runtime-verify/platform-client';
+import { RuntimeVerifyPlatformClient, type InitiationRequest, validateReport } from '../../src/runtime-verify/platform-client';
 import { createRunnerResult, type RuntimeVerifyReport } from '../../src/runtime-verify/report';
 
 const hash = `sha256:${'a'.repeat(64)}`;
+const projectId = 'cgprj_44444444444444444444444444444444';
+const environmentId = 'rtvenv_11111111111111111111111111111111';
+const checkId = 'cgchk_22222222222222222222222222222222';
+const runId = 'rtvrun_33333333333333333333333333333333';
 const request: InitiationRequest = {
-  environmentId: 'rtvenv_test', contractGuardCheckId: 'cgchk_test', contractContentHash: hash,
-  configurationContentHash: hash, deployment: {
+  environmentId, contractGuardCheckId: checkId, contractContentHash: hash,
+  configurationContentHash: hash, displayName: 'Runtime verification', deployment: {
     provider: 'github-actions', repository: 'owner/repo', commitSha: 'abc', ref: 'refs/heads/main', workflow: 'CI',
     workflowRunId: '1', workflowRunAttempt: 1
-  }, runner: { name: 'alconite-runtime-verify-action', version: '2.1.0', operatingSystem: 'Linux', architecture: 'X64' }
+  }, runner: { name: 'alconite-runtime-verify-action', version: '2.1.1', operatingSystem: 'Linux', architecture: 'X64' }
 };
 const report: RuntimeVerifyReport = {
-  schemaVersion: 'alconite.runtime-verify.report.v1', runId: 'rtvrun_test', projectId: 'cgprj_test',
-  environmentId: 'rtvenv_test', contractGuardCheckId: 'cgchk_test', status: 'completed', gateResult: 'passed',
-  contractContentHash: hash, expectedContractContentHash: hash,
-  summary: { configuredOperations: 1, executedOperations: 1, passedOperations: 1, failedOperations: 0, warningOperations: 0, findingCount: 0 },
-  findings: [], reportUrl: '/runtime/report'
+  schema: 'alconite.runtime-verify.report.v1', runId, projectId, environmentId, contractGuardCheckId: checkId,
+  status: 'completed', gateResult: 'passed', policyRevision: 1,
+  contract: {
+    approvedCandidateVersionId: 'cgver_55555555555555555555555555555555',
+    approvedCandidateContentHash: hash, localContractContentHash: hash, hashMatched: true
+  },
+  deployment: {
+    provider: 'github-actions', repository: 'owner/repo', commitSha: 'abc', ref: 'refs/heads/main', workflow: 'CI',
+    workflowRunId: '1', workflowRunAttempt: 1, releaseIdentifier: null
+  },
+  runner: { name: 'alconite-runtime-verify-action', version: '2.1.1', operatingSystem: 'Linux', architecture: 'X64' },
+  summary: {
+    configuredOperations: 0, executedOperations: 0, passedOperations: 0, failedOperations: 0, warningOperations: 0,
+    informationalFindings: 0, totalDurationMilliseconds: 0
+  },
+  violations: [], findings: [], createdAt: 1, completedAt: 2,
+  reportUrl: `/api/v1/runtime-verify/projects/${projectId}/runs/${runId}/report`
 };
-const result = createRunnerResult({ runId: 'rtvrun_test', contractContentHash: hash, configurationContentHash: hash,
-  startedAt: '2026-01-01T00:00:00.000Z', completedAt: '2026-01-01T00:00:01.000Z', observations: [], findings: [] });
+const result = createRunnerResult({
+  completedAt: '2026-01-01T00:00:01.000Z',
+  execution: {
+    configuredOperations: 0, executedOperations: 0, passedOperations: 0, failedOperations: 0, warningOperations: 0,
+    totalDurationMilliseconds: 0
+  },
+  contract: { localContentHash: hash, matchedApprovedCandidate: true }, observations: [], findings: []
+});
 
 async function mockServer(t: TestContext, handler: (request: IncomingMessage, response: ServerResponse, body: any) => void): Promise<URL> {
   const instance = createServer((incoming, outgoing) => {
@@ -40,52 +62,63 @@ async function mockServer(t: TestContext, handler: (request: IncomingMessage, re
 }
 
 function client(apiUrl: URL, retryAttempts = 1, sleep = async () => undefined) {
-  return new RuntimeVerifyPlatformClient({ apiUrl, projectId: 'cgprj_test', projectToken: 'alc_cg_secret', retryAttempts, sleep, random: () => 0 });
+  return new RuntimeVerifyPlatformClient({ apiUrl, projectId, projectToken: 'alc_cg_secret', retryAttempts, sleep, random: () => 0 });
 }
 function json(reply: ServerResponse, status: number, body: unknown): void {
   reply.writeHead(status, { 'content-type': 'application/json' }); reply.end(JSON.stringify(body));
 }
+function pending(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    runId, status: 'pending', replayed: false, expectedContractContentHash: hash,
+    limits: { maximumOperations: 10, maximumFindings: 500, maximumResultBytes: 5_242_880, maximumResponseBytes: 1_048_576 },
+    report: null,
+    ...overrides
+  };
+}
 
-test('initiates with bearer auth, idempotency, and no target origin', async t => {
+test('initiates with bearer auth, idempotency, required display name, and no target origin', async t => {
   const apiUrl = await mockServer(t, (incoming, reply, body) => {
     assert.equal(incoming.headers.authorization, 'Bearer alc_cg_secret');
     assert.equal(incoming.headers['idempotency-key'], 'runtime-gh-v1-test');
+    assert.equal(body.displayName, 'Runtime verification');
     assert.equal(JSON.stringify(body).includes('baseUrl'), false);
-    json(reply, 200, { schemaVersion: 'alconite.runtime-verify.run.v1', runId: 'rtvrun_test', status: 'pending', expectedContractContentHash: hash, maximumOperations: 10 });
+    json(reply, 200, pending());
   });
   const response = await client(apiUrl).initiate(request, 'runtime-gh-v1-test');
   assert.equal(response.status, 'pending');
   assert.equal(response.maximumOperations, 10);
 });
 
-test('submits completion, failure, and the same deterministic result digest on replay', async t => {
+test('submits the canonical completion envelope, failure, and deterministic result digest on replay', async t => {
   const digests: string[] = [];
   let failures = 0;
   const apiUrl = await mockServer(t, (incoming, reply, body) => {
     if (incoming.url?.endsWith('/failure')) { failures += 1; json(reply, 200, {}); return; }
+    assert.equal(body.schema, 'alconite.runtime-verify.runner-result.v1');
+    assert.equal(Object.hasOwn(body, 'schemaVersion'), false);
+    assert.equal(Object.hasOwn(body, 'runId'), false);
+    assert.deepEqual(body.contract, { localContentHash: hash, matchedApprovedCandidate: true });
     digests.push(body.resultDigest); json(reply, 200, report);
   });
   const platform = client(apiUrl);
-  await platform.complete('rtvrun_test', result);
-  await platform.complete('rtvrun_test', result);
-  await platform.fail('rtvrun_test', 'runner_internal_error', 'Safe runner failure.');
+  await platform.complete(runId, result);
+  await platform.complete(runId, result);
+  await platform.fail(runId, 'runner_internal_error', 'Safe runner failure.');
   assert.deepEqual(digests, [result.resultDigest, result.resultDigest]);
   assert.equal(failures, 1);
 });
 
 test('returns a completed replay without target work', async t => {
-  const apiUrl = await mockServer(t, (_incoming, reply) => json(reply, 200, {
-    schemaVersion: 'alconite.runtime-verify.run.v1', runId: 'rtvrun_test', status: 'completed', expectedContractContentHash: hash, replayed: true, report
-  }));
+  const apiUrl = await mockServer(t, (_incoming, reply) => json(reply, 200, pending({
+    status: 'completed', replayed: true, report
+  })));
   const replay = await client(apiUrl).initiate(request, 'key');
   assert.equal(replay.replayed, true);
   assert.equal(replay.report?.gateResult, 'passed');
 });
 
 test('recognizes a pending idempotent replay and continues runner work', async t => {
-  const apiUrl = await mockServer(t, (_incoming, reply) => json(reply, 200, {
-    schemaVersion: 'alconite.runtime-verify.run.v1', runId: 'rtvrun_test', status: 'pending', expectedContractContentHash: hash, replayed: true
-  }));
+  const apiUrl = await mockServer(t, (_incoming, reply) => json(reply, 200, pending({ replayed: true })));
   const replay = await client(apiUrl).initiate(request, 'key');
   assert.equal(replay.status, 'pending');
   assert.equal(replay.replayed, true);
@@ -106,9 +139,9 @@ test('retries only bounded transient platform failures', async t => {
   const apiUrl = await mockServer(t, (_incoming, reply) => {
     calls += 1;
     if (calls < 3) { json(reply, 503, { error: { code: 'unavailable', message: 'retry' } }); return; }
-    json(reply, 200, { schemaVersion: 'alconite.runtime-verify.run.v1', runId: 'rtvrun_test', status: 'pending', expectedContractContentHash: hash });
+    json(reply, 200, pending());
   });
-  await new RuntimeVerifyPlatformClient({ apiUrl, projectId: 'cgprj_test', projectToken: 'alc_cg_secret', retryAttempts: 3,
+  await new RuntimeVerifyPlatformClient({ apiUrl, projectId, projectToken: 'alc_cg_secret', retryAttempts: 3,
     sleep: async delay => { delays.push(delay); }, random: () => 0 }).initiate(request, 'key');
   assert.equal(calls, 3);
   assert.deepEqual(delays, [250, 500]);
@@ -123,7 +156,8 @@ test('refuses non-HTTPS non-loopback Alconite origins', () => {
   assert.throws(() => client(new URL('http://example.test/')), /must use HTTPS/);
 });
 
-test('rejects malformed platform reports', async t => {
-  const apiUrl = await mockServer(t, (_incoming, reply) => json(reply, 200, { ...report, schemaVersion: 'unknown' }));
-  await assert.rejects(client(apiUrl).complete('rtvrun_test', result), /schema version/);
+test('rejects malformed and legacy platform reports', async t => {
+  const apiUrl = await mockServer(t, (_incoming, reply) => json(reply, 200, { ...report, schema: 'unknown' }));
+  await assert.rejects(client(apiUrl).complete(runId, result), /schema version/);
+  assert.throws(() => validateReport({ ...report, schema: undefined, schemaVersion: 'alconite.runtime-verify.report.v1' }), /schema version/);
 });

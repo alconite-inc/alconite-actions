@@ -2,7 +2,6 @@ import { getInput, info, setFailed, setOutput, setSecret, writeJobSummary } from
 import { shouldFailGate } from '../contract-guard';
 import { loadConfiguration } from './configuration';
 import { safeError, type RuntimeErrorCode, RuntimeVerifyError } from './errors';
-import { contractHashMismatch } from './findings';
 import { runtimeSummary } from './github-summary';
 import { deriveIdempotencyKey, readInputs } from './inputs';
 import { loadOpenApi } from './openapi';
@@ -33,28 +32,40 @@ async function run(): Promise<void> {
     runId = initiation.runId;
     replayed = initiation.replayed;
     if (initiation.status === 'completed') {
-      await finish(initiation.report!, inputs, true, contract.contentHash === initiation.expectedContractContentHash,
-        initiation.runId, contract.contentHash, initiation.expectedContractContentHash);
+      await finish(initiation.report!, inputs, true, initiation.runId, contract.contentHash,
+        initiation.expectedContractContentHash);
       return;
     }
     plan = createOperationPlan(contract, configuration.configuration, configuration.resolvedHeaders, initiation.maximumOperations);
-    const startedAt = new Date().toISOString();
     let observations = [] as Awaited<ReturnType<typeof executePlan>>['observations'];
     let findings = [] as Awaited<ReturnType<typeof executePlan>>['findings'];
     if (contract.contentHash !== initiation.expectedContractContentHash) {
-      findings = [contractHashMismatch(initiation.expectedContractContentHash, contract.contentHash)];
+      observations = plan.map(operation => ({
+        operationId: operation.operationId,
+        method: operation.method,
+        pathTemplate: operation.pathTemplate,
+        outcome: 'not_executed' as const,
+        durationMilliseconds: 0
+      }));
     } else {
       const totalSignal = AbortSignal.timeout(inputs.timeoutSeconds * 1_000);
       ({ observations, findings } = await executePlan(contract, plan, inputs.baseUrl, configuration.configuration.defaults, totalSignal));
     }
     findings = boundFindings(findings);
+    const completedAt = new Date().toISOString();
     const result = createRunnerResult({
-      runId, contractContentHash: contract.contentHash, configurationContentHash: configuration.contentHash,
-      startedAt, completedAt: new Date().toISOString(), observations, findings
+      completedAt,
+      execution: summarize(plan.length, observations),
+      contract: {
+        localContentHash: contract.contentHash,
+        matchedApprovedCandidate: contract.contentHash === initiation.expectedContractContentHash
+      },
+      observations,
+      findings
     });
     const report = await platform.complete(runId, result);
-    await finish(report, inputs, replayed, contract.contentHash === initiation.expectedContractContentHash,
-      initiation.runId, contract.contentHash, initiation.expectedContractContentHash);
+    await finish(report, inputs, replayed, initiation.runId, contract.contentHash,
+      initiation.expectedContractContentHash);
   } catch (error) {
     const safe = safeError(error);
     if (runId && safe.code !== 'platform_error') {
@@ -68,7 +79,6 @@ async function finish(
   report: RuntimeVerifyReport,
   inputs: ReturnType<typeof readInputs>,
   replayed: boolean,
-  contractHashMatch: boolean,
   expectedRunId: string,
   localContractHash: string,
   expectedContractHash: string
@@ -76,7 +86,8 @@ async function finish(
   if (report.projectId !== inputs.projectId || report.environmentId !== inputs.environmentId || report.contractGuardCheckId !== inputs.checkId) {
     throw new RuntimeVerifyError('platform_contract_mismatch', 'The Runtime Verify report does not match the requested project, environment, and Contract Guard check.');
   }
-  if (report.runId !== expectedRunId || report.contractContentHash !== localContractHash || report.expectedContractContentHash !== expectedContractHash) {
+  if (report.runId !== expectedRunId || report.contract.localContractContentHash !== localContractHash
+    || report.contract.approvedCandidateContentHash !== expectedContractHash) {
     throw new RuntimeVerifyError('platform_contract_mismatch', 'The Runtime Verify report does not match the initiated run and contract hashes.');
   }
   const reportPath = await writeCanonicalReport(report, inputs.reportPath);
@@ -89,15 +100,15 @@ async function finish(
   setOutput('gate-result', report.gateResult);
   setOutput('report-url', reportUrl);
   setOutput('report-path', reportPath);
-  setOutput('contract-content-hash', report.contractContentHash);
+  setOutput('contract-content-hash', report.contract.localContractContentHash);
   setOutput('configured-operations', String(report.summary.configuredOperations));
   setOutput('executed-operations', String(report.summary.executedOperations));
   setOutput('passed-operations', String(report.summary.passedOperations));
   setOutput('failed-operations', String(report.summary.failedOperations));
   setOutput('warning-operations', String(report.summary.warningOperations));
-  setOutput('finding-count', String(report.summary.findingCount));
+  setOutput('finding-count', String(report.findings.length));
   setOutput('replayed', String(replayed));
-  await writeJobSummary(runtimeSummary(report, reportUrl, contractHashMatch));
+  await writeJobSummary(runtimeSummary(report, reportUrl));
   info(`Alconite Runtime Verify completed with gate result ${report.gateResult}.`);
   if (shouldFailGate(report.gateResult, inputs.failOn)) {
     throw new RuntimeVerifyError('platform_error', `Alconite Runtime Verify gate result ${report.gateResult} meets the configured fail-on threshold.`);

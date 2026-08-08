@@ -4,7 +4,6 @@ import { finding } from './findings';
 import type { ApprovedContract } from './openapi';
 import type { PlannedOperation } from './operation-plan';
 import type { RuntimeObservation } from './report';
-import { sha256 } from './redaction';
 import { validateResponse } from './response-validator';
 
 export interface TargetExecutionResult {
@@ -57,7 +56,7 @@ async function executeOperation(
     for (let redirect = 0; redirect <= 3; redirect += 1) {
       response = await fetch(current, {
         method: plan.method,
-        headers: { ...plan.headers, 'User-Agent': 'alconite-runtime-verify-action/2.1.0', Accept: 'application/json, application/problem+json, */*;q=0.1' },
+        headers: { ...plan.headers, 'User-Agent': 'alconite-runtime-verify-action/2.1.1', Accept: 'application/json, application/problem+json, */*;q=0.1' },
         redirect: 'manual', signal: controller.signal
       });
       if (!REDIRECT_STATUSES.has(response.status)) break;
@@ -101,8 +100,7 @@ async function executeOperation(
     }
     const validation = validateResponse({ contract, plan, statusCode: response.status, headers: response.headers, body: bodyResult.body, durationMilliseconds: duration });
     return {
-      observation: observation(plan, duration, bodyResult.size, validation.findings, response.status, validation.contentType,
-        bodyResult.size > 0 ? sha256(bodyResult.body) : undefined),
+      observation: observation(plan, duration, bodyResult.size, validation.findings, response.status, validation.contentType),
       findings: validation.findings
     };
   } catch (error) {
@@ -139,7 +137,7 @@ async function readBoundedBody(response: Response, maximum: number): Promise<{ b
 
 function observation(
   plan: PlannedOperation, duration: number, responseBytes: number, findings: RuntimeFinding[],
-  statusCode?: number, contentType?: string, responseBodyHash?: string
+  statusCode?: number, contentType?: string
 ): RuntimeObservation {
   const hasFailure = findings.some(value => value.classification === 'failure');
   const hasWarning = findings.some(value => value.classification === 'warning');
@@ -147,7 +145,7 @@ function observation(
     operationId: plan.operationId, method: plan.method, pathTemplate: plan.pathTemplate,
     outcome: hasFailure ? 'failed' : hasWarning ? 'warning' : 'passed',
     ...(statusCode === undefined ? {} : { statusCode }), ...(contentType ? { contentType } : {}),
-    durationMilliseconds: duration, responseBytes, ...(responseBodyHash ? { responseBodyHash } : {}), findingCount: findings.length
+    durationMilliseconds: duration, responseBytes
   };
 }
 

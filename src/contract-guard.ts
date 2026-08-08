@@ -376,7 +376,7 @@ export async function runCheck(
           accept: 'application/json',
           authorization: `Bearer ${request.projectToken}`,
           'idempotency-key': request.idempotencyKey,
-          'user-agent': 'alconite-contract-guard-action/2.1.0',
+          'user-agent': 'alconite-contract-guard-action/2.1.1',
         },
         body,
         redirect: 'manual',
