@@ -10,6 +10,7 @@ All notable changes to this project are documented in this file.
 - Read operation limits from the platform's bounded `limits` object and submit sanitized observations and stable finding fingerprints without response-body hashes.
 - Accept server-generated informational findings, policy violations, immutable finding identities, and nested approved/local contract metadata.
 - Added the official redirect-rejection and content-encoding finding rules to the synchronized runner contract.
+- Release a safely identified pending run when initiation-response validation fails so usage is not left reserved until maintenance expiration.
 
 ### Compatibility
 

@@ -27305,7 +27305,19 @@ var RuntimeVerifyPlatformClient = class {
       "run initiation",
       idempotencyKey
     );
-    return validateInitiation(body);
+    try {
+      return validateInitiation(body);
+    } catch (error2) {
+      const runId = recoverableRunId(body);
+      if (runId) {
+        await this.fail(
+          runId,
+          "platform_contract_mismatch",
+          "The Runtime Verify initiation response did not match the supported contract."
+        ).catch(() => void 0);
+      }
+      throw error2;
+    }
   }
   async complete(runId, result) {
     validateRunId(runId);
@@ -27369,6 +27381,17 @@ var RuntimeVerifyPlatformClient = class {
     await this.sleep(Math.round(base + base * 0.25 * this.random()));
   }
 };
+function recoverableRunId(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return void 0;
+  const value = raw.runId;
+  if (typeof value !== "string") return void 0;
+  try {
+    validateRunId(value);
+    return value;
+  } catch {
+    return void 0;
+  }
+}
 function createInitiationRequest(inputs, contractContentHash, configurationContentHash, environment = process.env) {
   return {
     environmentId: inputs.environmentId,
