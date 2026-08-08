@@ -31,6 +31,7 @@ async function run(): Promise<void> {
     );
     runId = initiation.runId;
     replayed = initiation.replayed;
+    info(`Alconite Runtime Verify run ${runId} ${replayed ? 'replayed' : 'initiated'}.`);
     if (initiation.status === 'completed') {
       await finish(initiation.report!, inputs, true, initiation.runId, contract.contentHash,
         initiation.expectedContractContentHash);

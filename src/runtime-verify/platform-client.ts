@@ -90,13 +90,22 @@ export class RuntimeVerifyPlatformClient {
   }
 
   async initiate(request: InitiationRequest, idempotencyKey: string): Promise<InitiationResponse> {
-    const body = await this.post(`/api/v1/runtime-verify/projects/${this.options.projectId}/runs`, request, idempotencyKey);
+    const body = await this.post(
+      `/api/v1/runtime-verify/projects/${this.options.projectId}/runs`,
+      request,
+      'run initiation',
+      idempotencyKey
+    );
     return validateInitiation(body);
   }
 
   async complete(runId: string, result: RunnerResult): Promise<RuntimeVerifyReport> {
     validateRunId(runId);
-    const body = await this.post(`/api/v1/runtime-verify/projects/${this.options.projectId}/runs/${runId}/results`, result);
+    const body = await this.post(
+      `/api/v1/runtime-verify/projects/${this.options.projectId}/runs/${runId}/results`,
+      result,
+      'result submission'
+    );
     return validateReport(body);
   }
 
@@ -104,10 +113,10 @@ export class RuntimeVerifyPlatformClient {
     validateRunId(runId);
     await this.post(`/api/v1/runtime-verify/projects/${this.options.projectId}/runs/${runId}/failure`, {
       code, message: message.slice(0, 300)
-    });
+    }, 'processing-failure submission');
   }
 
-  private async post(route: string, body: unknown, idempotencyKey?: string): Promise<unknown> {
+  private async post(route: string, body: unknown, phase: string, idempotencyKey?: string): Promise<unknown> {
     const url = new URL(route, this.options.apiUrl);
     for (let attempt = 1; attempt <= this.options.retryAttempts; attempt += 1) {
       let response: Response;
@@ -140,7 +149,7 @@ export class RuntimeVerifyPlatformClient {
         continue;
       }
       const parsed = await readJson(response);
-      if (!response.ok) throw platformHttpError(response.status, parsed);
+      if (!response.ok) throw platformHttpError(response.status, parsed, phase);
       return parsed;
     }
     throw new RuntimeVerifyError('platform_error', 'Alconite did not complete the request.');
@@ -321,11 +330,11 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 async function discard(response: Response): Promise<void> { await response.body?.cancel().catch(() => undefined); }
-function platformHttpError(status: number, raw: unknown): RuntimeVerifyError {
+function platformHttpError(status: number, raw: unknown, phase: string): RuntimeVerifyError {
   const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
   const detail = value.error && typeof value.error === 'object' ? value.error as Record<string, unknown> : {};
   const code = typeof detail.code === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(detail.code) ? ` (${detail.code})` : '';
-  return new RuntimeVerifyError('platform_error', `Alconite rejected the Runtime Verify request with HTTP ${status}${code}.`);
+  return new RuntimeVerifyError('platform_error', `Alconite rejected Runtime Verify ${phase} with HTTP ${status}${code}.`);
 }
 function validateRunId(value: string): void { if (!/^rtvrun_[0-9a-f]{32}$/.test(value)) mismatch('The Runtime Verify run identifier is invalid.'); }
 function object(raw: unknown, context: string): Record<string, unknown> { if (!raw || typeof raw !== 'object' || Array.isArray(raw)) mismatch(`The ${context} is invalid.`); return raw as Record<string, unknown>; }

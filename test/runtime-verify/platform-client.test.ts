@@ -128,10 +128,20 @@ for (const status of [401, 403, 409, 429]) {
   test(`does not retry platform HTTP ${status}`, async t => {
     let calls = 0;
     const apiUrl = await mockServer(t, (_incoming, reply) => { calls += 1; json(reply, status, { error: { code: 'rejected', message: 'unsafe detail omitted' } }); });
-    await assert.rejects(client(apiUrl, 3).initiate(request, 'key'), new RegExp(`HTTP ${status}`));
+    await assert.rejects(client(apiUrl, 3).initiate(request, 'key'), new RegExp(`run initiation with HTTP ${status}`));
     assert.equal(calls, 1);
   });
 }
+
+test('identifies the failed platform phase without exposing request data', async t => {
+  const apiUrl = await mockServer(t, (_incoming, reply) => {
+    json(reply, 503, { error: { code: 'service_unavailable', message: 'internal detail omitted' } });
+  });
+  await assert.rejects(
+    client(apiUrl).complete(runId, result),
+    /result submission with HTTP 503 \(service_unavailable\)/
+  );
+});
 
 test('retries only bounded transient platform failures', async t => {
   let calls = 0;
