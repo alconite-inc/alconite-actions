@@ -233,10 +233,10 @@ test('completed replay skips both target execution and result submission', async
   assert.match(result.output, /replayed<<[^\n]+\ntrue\n/);
 });
 
-test('invalid platform limits fail before target execution without a spurious failure upload', async () => {
+test('invalid platform limits fail before target execution and release the pending run', async () => {
   const result = await runScenario({ maximumOperations: 0 });
   assert.equal(result.exitCode, 1);
-  assert.equal(result.targetCalls, 0); assert.equal(result.failureCalls, 0);
+  assert.equal(result.targetCalls, 0); assert.equal(result.failureCalls, 1);
   assert.match(`${result.stdout}\n${result.output}`, /limits\.maximumOperations/);
   assert.doesNotMatch(result.stderr, /super-secret/);
 });

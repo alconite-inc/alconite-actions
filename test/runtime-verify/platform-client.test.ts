@@ -124,6 +124,23 @@ test('recognizes a pending idempotent replay and continues runner work', async t
   assert.equal(replay.replayed, true);
 });
 
+test('releases a safely identified pending run when initiation validation fails', async t => {
+  let failureCalls = 0;
+  const apiUrl = await mockServer(t, (incoming, reply, body) => {
+    if (incoming.url?.endsWith('/failure')) {
+      failureCalls += 1;
+      assert.equal(body.code, 'platform_contract_mismatch');
+      assert.doesNotMatch(body.message, /alc_cg_secret/);
+      json(reply, 200, {});
+      return;
+    }
+    json(reply, 200, pending({ limits: { maximumOperations: 0 } }));
+  });
+
+  await assert.rejects(client(apiUrl).initiate(request, 'key'), /limits\.maximumOperations/);
+  assert.equal(failureCalls, 1);
+});
+
 for (const status of [401, 403, 409, 429]) {
   test(`does not retry platform HTTP ${status}`, async t => {
     let calls = 0;
