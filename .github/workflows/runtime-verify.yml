@@ -77,7 +77,7 @@ jobs:
 
       - name: Verify deployed API
         id: verify
-        uses: alconite-inc/alconite-actions/runtime-verify@v2.1.1
+        uses: alconite-inc/alconite-actions/runtime-verify@v2.1.2
         with:
           project-id: ${{ inputs.project-id }}
           project-token: ${{ secrets.project-token }}

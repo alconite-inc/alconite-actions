@@ -14,6 +14,9 @@ const actionFiles = [
   'runtime-verify/action.yml',
 ];
 const immutableAction = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*@[a-f0-9]{40}$/u;
+const packageManifest = JSON.parse(await fs.readFile('package.json', 'utf8'));
+assert.equal(typeof packageManifest.version, 'string', 'package.json must declare a version');
+const currentSelfRelease = `v${packageManifest.version}`;
 
 for (const filename of actionFiles) {
   const source = await fs.readFile(filename, 'utf8');
@@ -60,7 +63,7 @@ for (const name of runtimeOutputs) assert.ok(runtime.outputs[name], `Runtime Ver
 const workflowFiles = (await fs.readdir('.github/workflows'))
   .filter((filename) => filename.endsWith('.yml') || filename.endsWith('.yaml'))
   .map((filename) => path.join('.github/workflows', filename));
-const selfRelease = /^alconite-inc\/alconite-actions(?:\/[A-Za-z0-9_.-]+)*@v2\.(?:0\.0|1\.[01])$/u;
+const selfRelease = /^alconite-inc\/alconite-actions(?:\/[A-Za-z0-9_.-]+)*@(v[0-9]+\.[0-9]+\.[0-9]+)$/u;
 for (const filename of workflowFiles) {
   const workflow = parse(await fs.readFile(filename, 'utf8'));
   for (const [jobName, job] of Object.entries(workflow.jobs || {})) {
@@ -68,9 +71,10 @@ for (const filename of workflowFiles) {
     for (const uses of usesValues) {
       if (uses.startsWith('./') || uses.startsWith('docker://')) continue;
       const normalized = uses.replace(/\s+#.*$/u, '');
+      const selfVersion = selfRelease.exec(normalized)?.[1];
       assert.ok(
-        immutableAction.test(normalized) || selfRelease.test(normalized),
-        `${filename} job ${jobName} must use an immutable SHA or an explicitly reviewed v2.0.0/v2.1.x self release`,
+        immutableAction.test(normalized) || selfVersion === 'v2.0.0' || selfVersion === currentSelfRelease,
+        `${filename} job ${jobName} must use an immutable SHA, the frozen v2.0.0 self release, or the current ${currentSelfRelease} self release`,
       );
     }
   }
