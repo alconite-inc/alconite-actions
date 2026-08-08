@@ -1,21 +1,46 @@
 {
-  "schemaVersion": "alconite.runtime-verify.report.v1",
-  "runId": "rtvrun_fixture",
-  "projectId": "cgprj_fixture",
-  "environmentId": "rtvenv_fixture",
-  "contractGuardCheckId": "cgchk_fixture",
+  "schema": "alconite.runtime-verify.report.v1",
+  "runId": "rtvrun_33333333333333333333333333333333",
+  "projectId": "cgprj_44444444444444444444444444444444",
+  "environmentId": "rtvenv_11111111111111111111111111111111",
+  "contractGuardCheckId": "cgchk_22222222222222222222222222222222",
   "status": "completed",
   "gateResult": "passed",
-  "contractContentHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "expectedContractContentHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "policyRevision": 1,
+  "contract": {
+    "approvedCandidateVersionId": "cgver_55555555555555555555555555555555",
+    "approvedCandidateContentHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "localContractContentHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "hashMatched": true
+  },
+  "deployment": {
+    "provider": "github-actions",
+    "repository": "example/platform",
+    "commitSha": "0123456789abcdef0123456789abcdef01234567",
+    "ref": "refs/heads/main",
+    "workflow": "Deploy",
+    "workflowRunId": "123456",
+    "workflowRunAttempt": 1,
+    "releaseIdentifier": "2026.08.05-1042"
+  },
+  "runner": {
+    "name": "alconite-runtime-verify-action",
+    "version": "2.1.1",
+    "operatingSystem": "linux",
+    "architecture": "x64"
+  },
   "summary": {
     "configuredOperations": 1,
     "executedOperations": 1,
     "passedOperations": 1,
     "failedOperations": 0,
     "warningOperations": 0,
-    "findingCount": 0
+    "informationalFindings": 0,
+    "totalDurationMilliseconds": 42
   },
+  "violations": [],
   "findings": [],
-  "reportUrl": "/api/v1/runtime-verify/projects/cgprj_fixture/runs/rtvrun_fixture/report"
+  "createdAt": 1785940200,
+  "completedAt": 1785940262,
+  "reportUrl": "/api/v1/runtime-verify/projects/cgprj_44444444444444444444444444444444/runs/rtvrun_33333333333333333333333333333333/report"
 }

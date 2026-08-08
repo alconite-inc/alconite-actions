@@ -60,7 +60,7 @@ for (const name of runtimeOutputs) assert.ok(runtime.outputs[name], `Runtime Ver
 const workflowFiles = (await fs.readdir('.github/workflows'))
   .filter((filename) => filename.endsWith('.yml') || filename.endsWith('.yaml'))
   .map((filename) => path.join('.github/workflows', filename));
-const selfRelease = /^alconite-inc\/alconite-actions(?:\/[A-Za-z0-9_.-]+)*@v2\.(?:0\.0|1\.0)$/u;
+const selfRelease = /^alconite-inc\/alconite-actions(?:\/[A-Za-z0-9_.-]+)*@v2\.(?:0\.0|1\.[01])$/u;
 for (const filename of workflowFiles) {
   const workflow = parse(await fs.readFile(filename, 'utf8'));
   for (const [jobName, job] of Object.entries(workflow.jobs || {})) {
@@ -70,7 +70,7 @@ for (const filename of workflowFiles) {
       const normalized = uses.replace(/\s+#.*$/u, '');
       assert.ok(
         immutableAction.test(normalized) || selfRelease.test(normalized),
-        `${filename} job ${jobName} must use an immutable SHA or an explicitly reviewed v2.0.0/v2.1.0 self release`,
+        `${filename} job ${jobName} must use an immutable SHA or an explicitly reviewed v2.0.0/v2.1.x self release`,
       );
     }
   }

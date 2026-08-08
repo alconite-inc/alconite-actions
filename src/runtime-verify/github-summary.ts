@@ -1,7 +1,7 @@
 import type { RuntimeVerifyReport } from './report';
 import { escapeMarkdown } from './redaction';
 
-export function runtimeSummary(report: RuntimeVerifyReport, reportUrl: string, contractHashMatch: boolean): string {
+export function runtimeSummary(report: RuntimeVerifyReport, reportUrl: string): string {
   const byRule = new Map<string, number>();
   for (const item of report.findings) byRule.set(item.ruleId, (byRule.get(item.ruleId) ?? 0) + 1);
   const lines = [
@@ -12,13 +12,13 @@ export function runtimeSummary(report: RuntimeVerifyReport, reportUrl: string, c
     `| Environment ID | ${escapeMarkdown(report.environmentId)} |`,
     `| Contract Guard check ID | ${escapeMarkdown(report.contractGuardCheckId)} |`,
     `| Run ID | ${escapeMarkdown(report.runId)} |`,
-    `| Contract hash match | ${contractHashMatch ? 'yes' : 'no'} |`,
+    `| Contract hash match | ${report.contract.hashMatched ? 'yes' : 'no'} |`,
     `| Configured operations | ${report.summary.configuredOperations} |`,
     `| Executed operations | ${report.summary.executedOperations} |`,
     `| Passed operations | ${report.summary.passedOperations} |`,
     `| Failed operations | ${report.summary.failedOperations} |`,
     `| Warning operations | ${report.summary.warningOperations} |`,
-    `| Findings | ${report.summary.findingCount} |`,
+    `| Findings | ${report.findings.length} |`,
     `| Canonical report | [Open in Alconite](${escapeMarkdown(reportUrl)}) |`, ''
   ];
   if (byRule.size > 0) {
@@ -31,7 +31,7 @@ export function runtimeSummary(report: RuntimeVerifyReport, reportUrl: string, c
   if (report.findings.length > 0) {
     lines.push('### Findings', '', '| Operation | Rule | Summary | Location |', '| --- | --- | --- | --- |');
     for (const item of report.findings.slice(0, 25)) {
-      lines.push(`| ${escapeMarkdown(item.operationId)} | ${escapeMarkdown(item.ruleId)} | ${escapeMarkdown(item.summary)} | ${escapeMarkdown(item.location)} |`);
+      lines.push(`| ${escapeMarkdown(item.operationId ?? 'Contract')} | ${escapeMarkdown(item.ruleId)} | ${escapeMarkdown(item.summary)} | ${escapeMarkdown(item.location ?? '—')} |`);
     }
     if (report.findings.length > 25) lines.push('', `_Showing 25 of ${report.findings.length} findings. Download the canonical report for the complete bounded result._`);
   }

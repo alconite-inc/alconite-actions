@@ -26887,41 +26887,8 @@ function isWithin(parent, child) {
   return relative === "" || !relative.startsWith("..") && !import_node_path.default.isAbsolute(relative);
 }
 
-// src/runtime-verify/findings.ts
-function finding(input) {
-  return {
-    ...input,
-    operationId: boundedText(input.operationId, 160),
-    pathTemplate: boundedText(input.pathTemplate, 600),
-    ruleId: boundedText(input.ruleId, 100),
-    summary: boundedText(input.summary, 300),
-    explanation: boundedText(input.explanation, 1200),
-    guidance: boundedText(input.guidance, 1200),
-    location: boundedText(input.location, 1e3),
-    ...input.expected === void 0 ? {} : { expected: boundedText(input.expected, 300) },
-    ...input.actual === void 0 ? {} : { actual: boundedText(input.actual, 300) },
-    durationMilliseconds: Math.max(0, Math.min(36e5, Math.round(input.durationMilliseconds)))
-  };
-}
-function contractHashMismatch(expected, actual) {
-  return finding({
-    operationId: "$contract",
-    method: "CONTRACT",
-    pathTemplate: "$contract",
-    classification: "failure",
-    ruleId: "runtime.contract.hash-mismatch",
-    summary: "The local contract does not match the approved contract.",
-    explanation: "Runtime requests were skipped because the exact local contract bytes have a different SHA-256 hash than the approved Contract Guard candidate.",
-    guidance: "Use the exact contract approved by the referenced Contract Guard check and retry the deployment verification.",
-    location: "$contract",
-    expected,
-    actual,
-    durationMilliseconds: 0
-  });
-}
-
 // src/runtime-verify/github-summary.ts
-function runtimeSummary(report, reportUrl, contractHashMatch) {
+function runtimeSummary(report, reportUrl) {
   const byRule = /* @__PURE__ */ new Map();
   for (const item of report.findings) byRule.set(item.ruleId, (byRule.get(item.ruleId) ?? 0) + 1);
   const lines = [
@@ -26934,13 +26901,13 @@ function runtimeSummary(report, reportUrl, contractHashMatch) {
     `| Environment ID | ${escapeMarkdown(report.environmentId)} |`,
     `| Contract Guard check ID | ${escapeMarkdown(report.contractGuardCheckId)} |`,
     `| Run ID | ${escapeMarkdown(report.runId)} |`,
-    `| Contract hash match | ${contractHashMatch ? "yes" : "no"} |`,
+    `| Contract hash match | ${report.contract.hashMatched ? "yes" : "no"} |`,
     `| Configured operations | ${report.summary.configuredOperations} |`,
     `| Executed operations | ${report.summary.executedOperations} |`,
     `| Passed operations | ${report.summary.passedOperations} |`,
     `| Failed operations | ${report.summary.failedOperations} |`,
     `| Warning operations | ${report.summary.warningOperations} |`,
-    `| Findings | ${report.summary.findingCount} |`,
+    `| Findings | ${report.findings.length} |`,
     `| Canonical report | [Open in Alconite](${escapeMarkdown(reportUrl)}) |`,
     ""
   ];
@@ -26954,7 +26921,7 @@ function runtimeSummary(report, reportUrl, contractHashMatch) {
   if (report.findings.length > 0) {
     lines.push("### Findings", "", "| Operation | Rule | Summary | Location |", "| --- | --- | --- | --- |");
     for (const item of report.findings.slice(0, 25)) {
-      lines.push(`| ${escapeMarkdown(item.operationId)} | ${escapeMarkdown(item.ruleId)} | ${escapeMarkdown(item.summary)} | ${escapeMarkdown(item.location)} |`);
+      lines.push(`| ${escapeMarkdown(item.operationId ?? "Contract")} | ${escapeMarkdown(item.ruleId)} | ${escapeMarkdown(item.summary)} | ${escapeMarkdown(item.location ?? "—")} |`);
     }
     if (report.findings.length > 25) lines.push("", `_Showing 25 of ${report.findings.length} findings. Download the canonical report for the complete bounded result._`);
   }
@@ -27291,8 +27258,28 @@ function planError(message) {
 }
 
 // src/runtime-verify/platform-client.ts
-var MAX_PLATFORM_RESPONSE_BYTES = 4 * 1024 * 1024;
+var MAX_PLATFORM_RESPONSE_BYTES = 8 * 1024 * 1024;
 var RETRYABLE_STATUSES = /* @__PURE__ */ new Set([502, 503, 504]);
+var RUNTIME_RULE_IDS = /* @__PURE__ */ new Set([
+  "runtime.contract.hash-mismatch",
+  "runtime.contract.check-not-approved",
+  "runtime.execution.operation-not-executed",
+  "runtime.execution.operation-not-found",
+  "runtime.execution.duration-exceeded",
+  "runtime.transport.unreachable",
+  "runtime.transport.timeout",
+  "runtime.transport.redirect-rejected",
+  "runtime.response.too-large",
+  "runtime.response.content-encoding-invalid",
+  "runtime.response.undocumented-status",
+  "runtime.response.content-type-mismatch",
+  "runtime.response.required-header-missing",
+  "runtime.response.schema-invalid",
+  "runtime.response.required-property-missing",
+  "runtime.response.type-mismatch",
+  "runtime.response.invalid-json",
+  "runtime.response.unexpected-body"
+]);
 var RuntimeVerifyPlatformClient = class {
   constructor(options) {
     this.options = options;
@@ -27312,12 +27299,21 @@ var RuntimeVerifyPlatformClient = class {
   sleep;
   random;
   async initiate(request, idempotencyKey) {
-    const body = await this.post(`/api/v1/runtime-verify/projects/${this.options.projectId}/runs`, request, idempotencyKey);
+    const body = await this.post(
+      `/api/v1/runtime-verify/projects/${this.options.projectId}/runs`,
+      request,
+      "run initiation",
+      idempotencyKey
+    );
     return validateInitiation(body);
   }
   async complete(runId, result) {
     validateRunId(runId);
-    const body = await this.post(`/api/v1/runtime-verify/projects/${this.options.projectId}/runs/${runId}/results`, result);
+    const body = await this.post(
+      `/api/v1/runtime-verify/projects/${this.options.projectId}/runs/${runId}/results`,
+      result,
+      "result submission"
+    );
     return validateReport(body);
   }
   async fail(runId, code, message) {
@@ -27325,9 +27321,9 @@ var RuntimeVerifyPlatformClient = class {
     await this.post(`/api/v1/runtime-verify/projects/${this.options.projectId}/runs/${runId}/failure`, {
       code,
       message: message.slice(0, 300)
-    });
+    }, "processing-failure submission");
   }
-  async post(route, body, idempotencyKey) {
+  async post(route, body, phase, idempotencyKey) {
     const url = new URL(route, this.options.apiUrl);
     for (let attempt = 1; attempt <= this.options.retryAttempts; attempt += 1) {
       let response;
@@ -27342,7 +27338,7 @@ var RuntimeVerifyPlatformClient = class {
             Authorization: `Bearer ${this.options.projectToken}`,
             "Content-Type": "application/json",
             Accept: "application/json",
-            "User-Agent": "alconite-runtime-verify-action/2.1.0",
+            "User-Agent": "alconite-runtime-verify-action/2.1.1",
             ...idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}
           },
           body: JSON.stringify(body)
@@ -27363,7 +27359,7 @@ var RuntimeVerifyPlatformClient = class {
         continue;
       }
       const parsed = await readJson(response);
-      if (!response.ok) throw platformHttpError(response.status, parsed);
+      if (!response.ok) throw platformHttpError(response.status, parsed, phase);
       return parsed;
     }
     throw new RuntimeVerifyError("platform_error", "Alconite did not complete the request.");
@@ -27379,7 +27375,7 @@ function createInitiationRequest(inputs, contractContentHash, configurationConte
     contractGuardCheckId: inputs.checkId,
     contractContentHash,
     configurationContentHash,
-    ...inputs.displayName ? { displayName: inputs.displayName } : {},
+    displayName: inputs.displayName ?? bounded(environment.GITHUB_SHA || "Runtime verification", 160),
     deployment: {
       provider: "github-actions",
       repository: bounded(environment.GITHUB_REPOSITORY, 200),
@@ -27392,7 +27388,7 @@ function createInitiationRequest(inputs, contractContentHash, configurationConte
     },
     runner: {
       name: "alconite-runtime-verify-action",
-      version: "2.1.0",
+      version: "2.1.1",
       operatingSystem: bounded(environment.RUNNER_OS ?? process.platform, 80),
       architecture: bounded(environment.RUNNER_ARCH ?? process.arch, 80)
     }
@@ -27400,83 +27396,133 @@ function createInitiationRequest(inputs, contractContentHash, configurationConte
 }
 function validateInitiation(raw) {
   const value = object2(raw, "initiation response");
-  if (value.schemaVersion !== void 0 && value.schemaVersion !== "alconite.runtime-verify.run.v1") mismatch("The initiation schema version is unsupported.");
   const runId = string(value.runId, "runId", 80);
   validateRunId(runId);
   const status = value.status;
   if (status !== "pending" && status !== "completed") mismatch("Initiation status is invalid.");
   const expectedContractContentHash = hash(value.expectedContractContentHash, "expectedContractContentHash");
-  const maximumOperations = value.maximumOperations === void 0 ? void 0 : integer(value.maximumOperations, 0, 1e3, "maximumOperations");
-  const report = value.report === void 0 ? void 0 : validateReport(value.report);
+  const limits = object2(value.limits, "initiation limits");
+  const maximumOperations = integer(limits.maximumOperations, 1, 500, "limits.maximumOperations");
+  const report = value.report === void 0 || value.report === null ? void 0 : validateReport(value.report);
   if (status === "completed" && !report) mismatch("A completed replay did not include its canonical report.");
+  if (typeof value.replayed !== "boolean") mismatch("The initiation replay state is invalid.");
   return {
     runId,
     status,
     expectedContractContentHash,
-    ...maximumOperations === void 0 ? {} : { maximumOperations },
-    replayed: value.replayed === true || status === "completed",
+    maximumOperations,
+    replayed: value.replayed || status === "completed",
     ...report ? { report } : {}
   };
 }
 function validateReport(raw) {
   const value = object2(raw, "Runtime Verify report");
-  if (value.schemaVersion !== "alconite.runtime-verify.report.v1") mismatch("The report schema version is unsupported.");
+  if (value.schema !== "alconite.runtime-verify.report.v1") mismatch("The report schema version is unsupported.");
   const runId = string(value.runId, "runId", 80);
   validateRunId(runId);
   const status = value.status;
   if (status !== "completed") mismatch("The report status is not completed.");
   const gateResult = value.gateResult;
   if (gateResult !== "passed" && gateResult !== "passed_with_warnings" && gateResult !== "failed") mismatch("The report gate result is invalid.");
-  const rawFindings = Array.isArray(value.findings) ? value.findings : mismatch("The report findings collection is invalid.");
-  if (rawFindings.length > 500) mismatch("The report contains too many findings.");
-  const findings = rawFindings.map(validateFinding);
+  const rawFindings = array2(value.findings, "report findings", 5e3);
+  const findings = rawFindings.map((item) => validateFinding(item, runId));
   const summaryRaw = object2(value.summary, "summary");
   const summary = {
-    configuredOperations: integer(summaryRaw.configuredOperations, 0, 1e3, "configuredOperations"),
-    executedOperations: integer(summaryRaw.executedOperations, 0, 1e3, "executedOperations"),
-    passedOperations: integer(summaryRaw.passedOperations, 0, 1e3, "passedOperations"),
-    failedOperations: integer(summaryRaw.failedOperations, 0, 1e3, "failedOperations"),
-    warningOperations: integer(summaryRaw.warningOperations, 0, 1e3, "warningOperations"),
-    findingCount: integer(summaryRaw.findingCount, 0, 500, "findingCount")
+    configuredOperations: integer(summaryRaw.configuredOperations, 0, 500, "configuredOperations"),
+    executedOperations: integer(summaryRaw.executedOperations, 0, 500, "executedOperations"),
+    passedOperations: integer(summaryRaw.passedOperations, 0, 500, "passedOperations"),
+    failedOperations: integer(summaryRaw.failedOperations, 0, 500, "failedOperations"),
+    warningOperations: integer(summaryRaw.warningOperations, 0, 500, "warningOperations"),
+    informationalFindings: integer(summaryRaw.informationalFindings, 0, 5e3, "informationalFindings"),
+    totalDurationMilliseconds: integer(summaryRaw.totalDurationMilliseconds, 0, Number.MAX_SAFE_INTEGER, "totalDurationMilliseconds")
   };
-  if (summary.findingCount !== findings.length) mismatch("The report finding total does not match its findings collection.");
   if (summary.passedOperations + summary.failedOperations + summary.warningOperations !== summary.executedOperations) {
     mismatch("The report operation outcome totals are inconsistent.");
   }
+  if (summary.informationalFindings !== findings.filter((item) => item.classification === "informational").length) {
+    mismatch("The report informational finding total is inconsistent.");
+  }
+  const contractRaw = object2(value.contract, "report contract");
+  const contract = {
+    approvedCandidateVersionId: string(contractRaw.approvedCandidateVersionId, "approvedCandidateVersionId", 80),
+    approvedCandidateContentHash: hash(contractRaw.approvedCandidateContentHash, "approvedCandidateContentHash"),
+    localContractContentHash: hash(contractRaw.localContractContentHash, "localContractContentHash"),
+    hashMatched: boolean2(contractRaw.hashMatched, "hashMatched")
+  };
+  if (contract.hashMatched !== (contract.approvedCandidateContentHash === contract.localContractContentHash)) {
+    mismatch("The report contract hash result is inconsistent.");
+  }
+  const deploymentRaw = object2(value.deployment, "report deployment");
+  const deployment = {
+    provider: string(deploymentRaw.provider, "deployment.provider", 50),
+    repository: nullableString(deploymentRaw.repository, "deployment.repository", 200),
+    commitSha: nullableString(deploymentRaw.commitSha, "deployment.commitSha", 64),
+    ref: nullableString(deploymentRaw.ref, "deployment.ref", 300),
+    workflow: nullableString(deploymentRaw.workflow, "deployment.workflow", 160),
+    workflowRunId: nullableString(deploymentRaw.workflowRunId, "deployment.workflowRunId", 80),
+    workflowRunAttempt: nullableInteger(deploymentRaw.workflowRunAttempt, 1, Number.MAX_SAFE_INTEGER, "deployment.workflowRunAttempt"),
+    releaseIdentifier: nullableString(deploymentRaw.releaseIdentifier, "deployment.releaseIdentifier", 160)
+  };
+  const runnerRaw = object2(value.runner, "report runner");
+  const runner = {
+    name: string(runnerRaw.name, "runner.name", 100),
+    version: string(runnerRaw.version, "runner.version", 50),
+    operatingSystem: string(runnerRaw.operatingSystem, "runner.operatingSystem", 50),
+    architecture: string(runnerRaw.architecture, "runner.architecture", 30)
+  };
+  const violations = array2(value.violations, "report violations", 100).map((raw2) => {
+    const violation = object2(raw2, "policy violation");
+    return {
+      code: string(violation.code, "violation.code", 100),
+      message: string(violation.message, "violation.message", 500),
+      failure: boolean2(violation.failure, "violation.failure")
+    };
+  });
   return {
-    schemaVersion: "alconite.runtime-verify.report.v1",
+    schema: "alconite.runtime-verify.report.v1",
     runId,
-    projectId: string(value.projectId, "projectId", 80),
-    environmentId: string(value.environmentId, "environmentId", 80),
-    contractGuardCheckId: string(value.contractGuardCheckId, "contractGuardCheckId", 80),
+    projectId: identifier2(value.projectId, "projectId", /^cgprj_[0-9a-f]{32}$/),
+    environmentId: identifier2(value.environmentId, "environmentId", /^rtvenv_[0-9a-f]{32}$/),
+    contractGuardCheckId: identifier2(value.contractGuardCheckId, "contractGuardCheckId", /^cgchk_[0-9a-f]{32}$/),
     status,
     gateResult,
-    contractContentHash: hash(value.contractContentHash, "contractContentHash"),
-    expectedContractContentHash: hash(value.expectedContractContentHash, "expectedContractContentHash"),
+    policyRevision: integer(value.policyRevision, 1, Number.MAX_SAFE_INTEGER, "policyRevision"),
+    contract,
+    deployment,
+    runner,
     summary,
+    violations,
     findings,
-    ...typeof value.reportUrl === "string" && value.reportUrl.length <= 300 ? { reportUrl: value.reportUrl } : {}
+    createdAt: integer(value.createdAt, 0, Number.MAX_SAFE_INTEGER, "createdAt"),
+    completedAt: integer(value.completedAt, 0, Number.MAX_SAFE_INTEGER, "completedAt"),
+    reportUrl: string(value.reportUrl, "reportUrl", 500)
   };
 }
-function validateFinding(raw) {
+function validateFinding(raw, expectedRunId) {
   const value = object2(raw, "finding");
-  const method = value.method;
-  if (method !== "GET" && method !== "HEAD" && method !== "CONTRACT") mismatch("A report finding method is invalid.");
+  const runId = string(value.runId, "finding.runId", 80);
+  if (runId !== expectedRunId) mismatch("A report finding belongs to a different run.");
   const classification = value.classification;
-  if (classification !== "failure" && classification !== "warning") mismatch("A report finding classification is invalid.");
+  if (classification !== "failure" && classification !== "warning" && classification !== "informational") mismatch("A report finding classification is invalid.");
+  const ruleId = string(value.ruleId, "finding.ruleId", 100);
+  if (!RUNTIME_RULE_IDS.has(ruleId)) mismatch("A report finding rule is unsupported.");
   return {
-    operationId: string(value.operationId, "operationId", 160),
-    method,
-    pathTemplate: string(value.pathTemplate, "pathTemplate", 600),
+    id: identifier2(value.id, "finding.id", /^rtvfnd_[0-9a-f]{32}$/),
+    runId,
+    fingerprint: string(value.fingerprint, "finding.fingerprint", 96),
+    operationId: nullableString(value.operationId, "finding.operationId", 200),
+    method: nullableString(value.method, "finding.method", 10),
+    pathTemplate: nullableString(value.pathTemplate, "finding.pathTemplate", 500),
     classification,
-    ruleId: string(value.ruleId, "ruleId", 100),
-    summary: string(value.summary, "summary", 300),
-    explanation: string(value.explanation, "explanation", 1200),
-    guidance: string(value.guidance, "guidance", 1200),
-    location: string(value.location, "location", 1e3),
-    ...typeof value.expected === "string" ? { expected: value.expected.slice(0, 300) } : {},
-    ...typeof value.actual === "string" ? { actual: value.actual.slice(0, 300) } : {},
-    durationMilliseconds: integer(value.durationMilliseconds, 0, 36e5, "durationMilliseconds")
+    ruleId,
+    summary: string(value.summary, "finding.summary", 240),
+    explanation: string(value.explanation, "finding.explanation", 1e3),
+    guidance: string(value.guidance, "finding.guidance", 1e3),
+    location: nullableString(value.location, "finding.location", 300),
+    expected: nullableString(value.expected, "finding.expected", 300),
+    actual: nullableString(value.actual, "finding.actual", 300),
+    durationMilliseconds: nullableInteger(value.durationMilliseconds, 0, Number.MAX_SAFE_INTEGER, "finding.durationMilliseconds"),
+    createdAt: integer(value.createdAt, 0, Number.MAX_SAFE_INTEGER, "finding.createdAt")
   };
 }
 async function readJson(response) {
@@ -27505,17 +27551,21 @@ async function readJson(response) {
 async function discard(response) {
   await response.body?.cancel().catch(() => void 0);
 }
-function platformHttpError(status, raw) {
+function platformHttpError(status, raw, phase) {
   const value = raw && typeof raw === "object" ? raw : {};
   const detail = value.error && typeof value.error === "object" ? value.error : {};
   const code = typeof detail.code === "string" && /^[A-Za-z0-9_.-]{1,80}$/.test(detail.code) ? ` (${detail.code})` : "";
-  return new RuntimeVerifyError("platform_error", `Alconite rejected the Runtime Verify request with HTTP ${status}${code}.`);
+  return new RuntimeVerifyError("platform_error", `Alconite rejected Runtime Verify ${phase} with HTTP ${status}${code}.`);
 }
 function validateRunId(value) {
-  if (!/^rtvrun_[A-Za-z0-9_-]{1,72}$/.test(value)) mismatch("The Runtime Verify run identifier is invalid.");
+  if (!/^rtvrun_[0-9a-f]{32}$/.test(value)) mismatch("The Runtime Verify run identifier is invalid.");
 }
 function object2(raw, context) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) mismatch(`The ${context} is invalid.`);
+  return raw;
+}
+function array2(raw, context, maximum) {
+  if (!Array.isArray(raw) || raw.length > maximum) mismatch(`The ${context} collection is invalid.`);
   return raw;
 }
 function string(raw, context, maximum) {
@@ -27530,6 +27580,21 @@ function hash(raw, context) {
 function integer(raw, minimum, maximum, context) {
   if (!Number.isInteger(raw) || raw < minimum || raw > maximum) mismatch(`The ${context} is invalid.`);
   return raw;
+}
+function boolean2(raw, context) {
+  if (typeof raw !== "boolean") mismatch(`The ${context} is invalid.`);
+  return raw;
+}
+function nullableString(raw, context, maximum) {
+  return raw === null ? null : string(raw, context, maximum);
+}
+function nullableInteger(raw, minimum, maximum, context) {
+  return raw === null ? null : integer(raw, minimum, maximum, context);
+}
+function identifier2(raw, context, pattern) {
+  const value = string(raw, context, 80);
+  if (!pattern.test(value)) mismatch(`The ${context} is invalid.`);
+  return value;
 }
 function bounded(raw, maximum) {
   return (raw ?? "").slice(0, maximum);
@@ -27546,8 +27611,60 @@ function mismatch(message) {
 var import_promises2 = require("node:fs/promises");
 var import_node_path3 = __toESM(require("node:path"));
 function createRunnerResult(input) {
-  const unsigned = { schemaVersion: "alconite.runtime-verify.runner-result.v1", ...input };
-  return { ...unsigned, resultDigest: sha256(stableJson(unsigned)) };
+  const schema = "alconite.runtime-verify.runner-result.v1";
+  const digestProjection = {
+    schema,
+    completedAt: unixSeconds(input.completedAt),
+    execution: {
+      configuredOperations: input.execution.configuredOperations,
+      executedOperations: input.execution.executedOperations,
+      passedOperations: input.execution.passedOperations,
+      failedOperations: input.execution.failedOperations,
+      warningOperations: input.execution.warningOperations,
+      totalDurationMilliseconds: input.execution.totalDurationMilliseconds
+    },
+    contract: {
+      localContentHash: input.contract.localContentHash,
+      matchedApprovedCandidate: input.contract.matchedApprovedCandidate
+    },
+    observations: input.observations.map((value) => ({
+      operationId: value.operationId,
+      method: value.method,
+      pathTemplate: value.pathTemplate,
+      statusCode: value.statusCode ?? null,
+      contentType: value.contentType ?? null,
+      durationMilliseconds: value.durationMilliseconds,
+      responseBytes: value.responseBytes ?? null,
+      outcome: value.outcome
+    })),
+    findings: input.findings.map((value) => ({
+      fingerprint: value.fingerprint,
+      operationId: value.operationId ?? null,
+      method: value.method ?? null,
+      pathTemplate: value.pathTemplate ?? null,
+      classification: value.classification,
+      ruleId: value.ruleId,
+      summary: value.summary,
+      explanation: value.explanation,
+      guidance: value.guidance,
+      location: value.location ?? null,
+      expected: value.expected ?? null,
+      actual: value.actual ?? null,
+      durationMilliseconds: value.durationMilliseconds ?? null
+    }))
+  };
+  return { schema, resultDigest: sha256(JSON.stringify(digestProjection)), ...input };
+}
+function summarize(configuredOperations, observations) {
+  const executed = observations.filter((value) => value.outcome !== "not_executed");
+  return {
+    configuredOperations,
+    executedOperations: executed.length,
+    passedOperations: executed.filter((value) => value.outcome === "passed").length,
+    failedOperations: executed.filter((value) => value.outcome === "failed").length,
+    warningOperations: executed.filter((value) => value.outcome === "warning").length,
+    totalDurationMilliseconds: observations.reduce((total, value) => total + value.durationMilliseconds, 0)
+  };
 }
 async function writeCanonicalReport(report, requestedPath) {
   const fallbackDirectory = process.env.RUNNER_TEMP || process.env.GITHUB_WORKSPACE || process.cwd();
@@ -27556,6 +27673,39 @@ async function writeCanonicalReport(report, requestedPath) {
   await (0, import_promises2.writeFile)(reportPath, `${JSON.stringify(report, null, 2)}
 `, { encoding: "utf8", mode: 384 });
   return reportPath;
+}
+function unixSeconds(value) {
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds)) throw new Error("Runtime Verify completedAt must be an RFC 3339 timestamp.");
+  return Math.floor(milliseconds / 1e3);
+}
+
+// src/runtime-verify/findings.ts
+function finding(input) {
+  const normalized = {
+    ...input,
+    ...input.operationId === void 0 ? {} : { operationId: boundedText(input.operationId, 200) },
+    ...input.pathTemplate === void 0 ? {} : { pathTemplate: boundedText(input.pathTemplate, 500) },
+    ruleId: boundedText(input.ruleId, 100),
+    summary: boundedText(input.summary, 240),
+    explanation: boundedText(input.explanation, 1e3),
+    guidance: boundedText(input.guidance, 1e3),
+    ...input.location === void 0 ? {} : { location: boundedText(input.location, 300) },
+    ...input.expected === void 0 ? {} : { expected: boundedText(input.expected, 300) },
+    ...input.actual === void 0 ? {} : { actual: boundedText(input.actual, 300) },
+    ...input.durationMilliseconds === void 0 ? {} : {
+      durationMilliseconds: Math.max(0, Math.min(36e5, Math.round(input.durationMilliseconds)))
+    }
+  };
+  const fingerprint = sha256(stableJson({
+    version: 1,
+    ruleId: normalized.ruleId,
+    operationId: normalized.operationId ?? null,
+    method: normalized.method ?? null,
+    pathTemplate: normalized.pathTemplate ?? null,
+    location: normalized.location ?? null
+  }));
+  return { fingerprint, ...normalized };
 }
 
 // src/runtime-verify/response-validator.ts
@@ -27788,7 +27938,7 @@ async function executeOperation(contract, plan, baseUrl, defaults, totalSignal) 
     for (let redirect = 0; redirect <= 3; redirect += 1) {
       response = await fetch(current, {
         method: plan.method,
-        headers: { ...plan.headers, "User-Agent": "alconite-runtime-verify-action/2.1.0", Accept: "application/json, application/problem+json, */*;q=0.1" },
+        headers: { ...plan.headers, "User-Agent": "alconite-runtime-verify-action/2.1.1", Accept: "application/json, application/problem+json, */*;q=0.1" },
         redirect: "manual",
         signal: controller.signal
       });
@@ -27863,15 +28013,7 @@ async function executeOperation(contract, plan, baseUrl, defaults, totalSignal) 
     }
     const validation = validateResponse({ contract, plan, statusCode: response.status, headers: response.headers, body: bodyResult.body, durationMilliseconds: duration });
     return {
-      observation: observation(
-        plan,
-        duration,
-        bodyResult.size,
-        validation.findings,
-        response.status,
-        validation.contentType,
-        bodyResult.size > 0 ? sha256(bodyResult.body) : void 0
-      ),
+      observation: observation(plan, duration, bodyResult.size, validation.findings, response.status, validation.contentType),
       findings: validation.findings
     };
   } catch (error2) {
@@ -27908,7 +28050,7 @@ async function readBoundedBody(response, maximum) {
   }
   return { body: Buffer.concat(chunks, size), size, exceeded: false };
 }
-function observation(plan, duration, responseBytes, findings, statusCode, contentType, responseBodyHash) {
+function observation(plan, duration, responseBytes, findings, statusCode, contentType) {
   const hasFailure = findings.some((value) => value.classification === "failure");
   const hasWarning = findings.some((value) => value.classification === "warning");
   return {
@@ -27919,9 +28061,7 @@ function observation(plan, duration, responseBytes, findings, statusCode, conten
     ...statusCode === void 0 ? {} : { statusCode },
     ...contentType ? { contentType } : {},
     durationMilliseconds: duration,
-    responseBytes,
-    ...responseBodyHash ? { responseBodyHash } : {},
-    findingCount: findings.length
+    responseBytes
   };
 }
 function transportFinding(plan, duration, ruleId, summary, explanation, guidance) {
@@ -27968,12 +28108,12 @@ async function run() {
     );
     runId = initiation.runId;
     replayed = initiation.replayed;
+    info(`Alconite Runtime Verify run ${runId} ${replayed ? "replayed" : "initiated"}.`);
     if (initiation.status === "completed") {
       await finish(
         initiation.report,
         inputs,
         true,
-        contract.contentHash === initiation.expectedContractContentHash,
         initiation.runId,
         contract.contentHash,
         initiation.expectedContractContentHash
@@ -27981,22 +28121,29 @@ async function run() {
       return;
     }
     plan = createOperationPlan(contract, configuration.configuration, configuration.resolvedHeaders, initiation.maximumOperations);
-    const startedAt = (/* @__PURE__ */ new Date()).toISOString();
     let observations = [];
     let findings = [];
     if (contract.contentHash !== initiation.expectedContractContentHash) {
-      findings = [contractHashMismatch(initiation.expectedContractContentHash, contract.contentHash)];
+      observations = plan.map((operation) => ({
+        operationId: operation.operationId,
+        method: operation.method,
+        pathTemplate: operation.pathTemplate,
+        outcome: "not_executed",
+        durationMilliseconds: 0
+      }));
     } else {
       const totalSignal = AbortSignal.timeout(inputs.timeoutSeconds * 1e3);
       ({ observations, findings } = await executePlan(contract, plan, inputs.baseUrl, configuration.configuration.defaults, totalSignal));
     }
     findings = boundFindings(findings);
+    const completedAt = (/* @__PURE__ */ new Date()).toISOString();
     const result = createRunnerResult({
-      runId,
-      contractContentHash: contract.contentHash,
-      configurationContentHash: configuration.contentHash,
-      startedAt,
-      completedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      completedAt,
+      execution: summarize(plan.length, observations),
+      contract: {
+        localContentHash: contract.contentHash,
+        matchedApprovedCandidate: contract.contentHash === initiation.expectedContractContentHash
+      },
       observations,
       findings
     });
@@ -28005,7 +28152,6 @@ async function run() {
       report,
       inputs,
       replayed,
-      contract.contentHash === initiation.expectedContractContentHash,
       initiation.runId,
       contract.contentHash,
       initiation.expectedContractContentHash
@@ -28018,11 +28164,11 @@ async function run() {
     throw safe;
   }
 }
-async function finish(report, inputs, replayed, contractHashMatch, expectedRunId, localContractHash, expectedContractHash) {
+async function finish(report, inputs, replayed, expectedRunId, localContractHash, expectedContractHash) {
   if (report.projectId !== inputs.projectId || report.environmentId !== inputs.environmentId || report.contractGuardCheckId !== inputs.checkId) {
     throw new RuntimeVerifyError("platform_contract_mismatch", "The Runtime Verify report does not match the requested project, environment, and Contract Guard check.");
   }
-  if (report.runId !== expectedRunId || report.contractContentHash !== localContractHash || report.expectedContractContentHash !== expectedContractHash) {
+  if (report.runId !== expectedRunId || report.contract.localContractContentHash !== localContractHash || report.contract.approvedCandidateContentHash !== expectedContractHash) {
     throw new RuntimeVerifyError("platform_contract_mismatch", "The Runtime Verify report does not match the initiated run and contract hashes.");
   }
   const reportPath = await writeCanonicalReport(report, inputs.reportPath);
@@ -28035,15 +28181,15 @@ async function finish(report, inputs, replayed, contractHashMatch, expectedRunId
   setOutput("gate-result", report.gateResult);
   setOutput("report-url", reportUrl);
   setOutput("report-path", reportPath);
-  setOutput("contract-content-hash", report.contractContentHash);
+  setOutput("contract-content-hash", report.contract.localContractContentHash);
   setOutput("configured-operations", String(report.summary.configuredOperations));
   setOutput("executed-operations", String(report.summary.executedOperations));
   setOutput("passed-operations", String(report.summary.passedOperations));
   setOutput("failed-operations", String(report.summary.failedOperations));
   setOutput("warning-operations", String(report.summary.warningOperations));
-  setOutput("finding-count", String(report.summary.findingCount));
+  setOutput("finding-count", String(report.findings.length));
   setOutput("replayed", String(replayed));
-  await writeJobSummary(runtimeSummary(report, reportUrl, contractHashMatch));
+  await writeJobSummary(runtimeSummary(report, reportUrl));
   info(`Alconite Runtime Verify completed with gate result ${report.gateResult}.`);
   if (shouldFailGate(report.gateResult, inputs.failOn)) {
     throw new RuntimeVerifyError("platform_error", `Alconite Runtime Verify gate result ${report.gateResult} meets the configured fail-on threshold.`);

@@ -15,8 +15,13 @@ test('redacts every registered secret from bounded diagnostic text', () => {
 
 test('canonical result digests are deterministic and exclude unsubmitted target material', () => {
   const input = {
-    runId: 'rtvrun_test', contractContentHash: sha256('contract'), configurationContentHash: sha256('configuration'),
-    startedAt: '2026-01-01T00:00:00.000Z', completedAt: '2026-01-01T00:00:01.000Z', observations: [], findings: []
+    completedAt: '2026-01-01T00:00:01.000Z',
+    execution: {
+      configuredOperations: 0, executedOperations: 0, passedOperations: 0, failedOperations: 0,
+      warningOperations: 0, totalDurationMilliseconds: 0
+    },
+    contract: { localContentHash: sha256('contract'), matchedApprovedCandidate: true },
+    observations: [], findings: []
   };
   assert.equal(createRunnerResult(input).resultDigest, createRunnerResult(input).resultDigest);
   const serialized = stableJson(createRunnerResult(input));
@@ -26,14 +31,30 @@ test('canonical result digests are deterministic and exclude unsubmitted target 
 test('GitHub summary escapes Markdown and HTML-sensitive platform values', () => {
   const hash = `sha256:${'a'.repeat(64)}`;
   const report: RuntimeVerifyReport = {
-    schemaVersion: 'alconite.runtime-verify.report.v1', runId: 'rtvrun_test', projectId: 'cgprj_test', environmentId: 'rtvenv_test',
-    contractGuardCheckId: 'cgchk_test', status: 'completed', gateResult: 'failed', contractContentHash: hash,
-    expectedContractContentHash: hash,
-    summary: { configuredOperations: 1, executedOperations: 1, passedOperations: 0, failedOperations: 1, warningOperations: 0, findingCount: 1 },
-    findings: [{ operationId: 'get|Health', method: 'GET', pathTemplate: '/health', classification: 'failure',
-      ruleId: 'runtime.response.schema-invalid', summary: '<unsafe>', explanation: 'safe', guidance: 'safe', location: '`/status`', durationMilliseconds: 1 }]
+    schema: 'alconite.runtime-verify.report.v1', runId: 'rtvrun_33333333333333333333333333333333',
+    projectId: 'cgprj_44444444444444444444444444444444', environmentId: 'rtvenv_11111111111111111111111111111111',
+    contractGuardCheckId: 'cgchk_22222222222222222222222222222222', status: 'completed', gateResult: 'failed', policyRevision: 1,
+    contract: {
+      approvedCandidateVersionId: 'cgver_55555555555555555555555555555555',
+      approvedCandidateContentHash: hash, localContractContentHash: hash, hashMatched: true
+    },
+    deployment: {
+      provider: 'github-actions', repository: null, commitSha: null, ref: null, workflow: null,
+      workflowRunId: null, workflowRunAttempt: null, releaseIdentifier: null
+    },
+    runner: { name: 'runner', version: '2.1.1', operatingSystem: 'linux', architecture: 'x64' },
+    summary: {
+      configuredOperations: 1, executedOperations: 1, passedOperations: 0, failedOperations: 1, warningOperations: 0,
+      informationalFindings: 0, totalDurationMilliseconds: 1
+    },
+    violations: [{ code: 'runtime_conformance_failure', message: 'failure', failure: true }],
+    findings: [{ id: 'rtvfnd_66666666666666666666666666666666', runId: 'rtvrun_33333333333333333333333333333333',
+      fingerprint: hash, operationId: 'get|Health', method: 'GET', pathTemplate: '/health', classification: 'failure',
+      ruleId: 'runtime.response.schema-invalid', summary: '<unsafe>', explanation: 'safe', guidance: 'safe', location: '`/status`',
+      expected: null, actual: null, durationMilliseconds: 1, createdAt: 1 }],
+    createdAt: 1, completedAt: 2, reportUrl: '/runtime/report'
   };
-  const summary = runtimeSummary(report, 'https://alconite.com/report', true);
+  const summary = runtimeSummary(report, 'https://alconite.com/report');
   assert.doesNotMatch(summary, /<unsafe>/);
   assert.match(summary, /&lt;unsafe&gt;/);
   assert.match(summary, /get\\\|Health/);

@@ -2,7 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
-## [2.1.0] - Unreleased
+## [2.1.1] - 2026-08-08
+
+### Fixed
+
+- Aligned Runtime Verify initiation, runner-result, deterministic digest, and canonical report handling with `alconite.runtime-verify.*.v1` in the Alconite Platform OpenAPI contract.
+- Read operation limits from the platform's bounded `limits` object and submit sanitized observations and stable finding fingerprints without response-body hashes.
+- Accept server-generated informational findings, policy violations, immutable finding identities, and nested approved/local contract metadata.
+- Added the official redirect-rejection and content-encoding finding rules to the synchronized runner contract.
+
+### Compatibility
+
+- Runtime Verify from `v2.1.0` is deprecated because its wire model predates the released platform contract. Consumers should move to `v2.1.1`; the Contract Guard root Action in `v2.1.0` is unaffected.
+
+## [2.1.0] - 2026-08-05
 
 ### Added
 
