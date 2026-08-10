@@ -163,7 +163,7 @@ export class ImpactPlatformClient {
             accept: 'application/json',
             authorization: `Bearer ${this.options.projectToken}`,
             'content-type': 'application/json',
-            'user-agent': 'alconite-impact-action/2.2.0-draft',
+            'user-agent': 'alconite-impact-action/2.1.2-unreleased',
           },
           body,
           redirect: 'manual',

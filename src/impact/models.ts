@@ -576,6 +576,15 @@ function validateChange(value: unknown): ImpactChange {
   const files = integer(item.affectedFileCount, 'change.affectedFileCount');
   const highFiles = integer(item.highConfidenceFileCount, 'change.highConfidenceFileCount');
   const sources = arrayValue(item.affectedSources, 'change.affectedSources', 200).map(validateAffectedSource);
+  for (let index = 1; index < sources.length; index += 1) {
+    const left = sources[index - 1];
+    const right = sources[index];
+    if (!left || !right) mismatch('change.affectedSources ordering is invalid');
+    const comparison = left.file.localeCompare(right.file, 'en') ||
+      SOURCE_LANGUAGES.indexOf(left.language) - SOURCE_LANGUAGES.indexOf(right.language) ||
+      left.line - right.line || left.column - right.column;
+    if (comparison >= 0) mismatch('change.affectedSources must be sorted and deduplicated');
+  }
   if (total !== returned + omitted || returned !== sources.length || files > total || highFiles > files) {
     mismatch('change affected-source counts are inconsistent');
   }
@@ -689,6 +698,10 @@ export function validateImpactReport(value: unknown, expectedProjectId: string, 
   const affectedFiles = integer(item.affectedFiles, 'affectedFiles');
   const affectedLocations = integer(item.affectedSourceLocations, 'affectedSourceLocations');
   const changes = arrayValue(item.changes, 'changes', 1_000).map(validateChange);
+  if (new Set(changes.map((change) => change.id)).size !== changes.length ||
+      new Set(changes.map((change) => change.deltaFingerprint)).size !== changes.length) {
+    mismatch('changes must have unique identities');
+  }
   if (changes.filter((change) => change.classification === 'breaking').length !== breaking) mismatch('breakingChanges is inconsistent');
   const riskRank = (risk: ImpactRisk): number => RISK_VALUES.indexOf(risk);
   const expectedRisk = changes.reduce<ImpactRisk>((maximum, change) => riskRank(change.risk) > riskRank(maximum) ? change.risk : maximum, 'NONE');
@@ -712,6 +725,11 @@ export function validateImpactReport(value: unknown, expectedProjectId: string, 
   canonicalUnique(languages, SOURCE_LANGUAGES, 'metadata.languagesDetected');
   const warnings = arrayValue(metadata.warnings, 'metadata.warnings', 200);
   warnings.forEach(validateWarning);
+  const warningKeys = warnings.map((warning) => {
+    const item = warning as { code: string; path?: string };
+    return `${item.code}\0${item.path ?? ''}`;
+  });
+  sortedUnique(warningKeys, 'metadata.warnings');
   const warningsOmitted = integer(metadata.warningsOmitted, 'metadata.warningsOmitted');
   const truncated = booleanValue(metadata.truncated, 'metadata.truncated');
   const total = integer(metadata.totalAffectedSourceLocations, 'metadata.totalAffectedSourceLocations');

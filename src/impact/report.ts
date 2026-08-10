@@ -198,11 +198,12 @@ export function impactSummary(report: ImpactReport): string {
       '### Strongest returned evidence',
       '',
       markdownTable(
-        ['Change', 'Source', 'Confidence', 'Evidence'],
+        ['Change', 'Source', 'Confidence', 'Basis', 'Evidence'],
         locations.slice(0, 25).map(({ change, source }) => [
           change.kind,
           `${source.file}:${source.line}:${source.column}`,
           source.confidence,
+          change.confidenceBasis.conditions.join(', '),
           source.evidence.map((evidence) => `${evidence.type}=${evidence.value}`).join(', '),
         ]),
       ),

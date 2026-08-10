@@ -1069,6 +1069,13 @@ function validateChange(value) {
   const files = integer(item.affectedFileCount, "change.affectedFileCount");
   const highFiles = integer(item.highConfidenceFileCount, "change.highConfidenceFileCount");
   const sources = arrayValue(item.affectedSources, "change.affectedSources", 200).map(validateAffectedSource);
+  for (let index = 1; index < sources.length; index += 1) {
+    const left = sources[index - 1];
+    const right = sources[index];
+    if (!left || !right) mismatch("change.affectedSources ordering is invalid");
+    const comparison = left.file.localeCompare(right.file, "en") || SOURCE_LANGUAGES.indexOf(left.language) - SOURCE_LANGUAGES.indexOf(right.language) || left.line - right.line || left.column - right.column;
+    if (comparison >= 0) mismatch("change.affectedSources must be sorted and deduplicated");
+  }
   if (total !== returned + omitted || returned !== sources.length || files > total || highFiles > files) {
     mismatch("change affected-source counts are inconsistent");
   }
@@ -1213,6 +1220,9 @@ function validateImpactReport(value, expectedProjectId, expectedCheckId) {
   const affectedFiles = integer(item.affectedFiles, "affectedFiles");
   const affectedLocations = integer(item.affectedSourceLocations, "affectedSourceLocations");
   const changes = arrayValue(item.changes, "changes", 1e3).map(validateChange);
+  if (new Set(changes.map((change) => change.id)).size !== changes.length || new Set(changes.map((change) => change.deltaFingerprint)).size !== changes.length) {
+    mismatch("changes must have unique identities");
+  }
   if (changes.filter((change) => change.classification === "breaking").length !== breaking) mismatch("breakingChanges is inconsistent");
   const riskRank = (risk) => RISK_VALUES.indexOf(risk);
   const expectedRisk = changes.reduce((maximum, change) => riskRank(change.risk) > riskRank(maximum) ? change.risk : maximum, "NONE");
@@ -1240,6 +1250,11 @@ function validateImpactReport(value, expectedProjectId, expectedCheckId) {
   canonicalUnique(languages, SOURCE_LANGUAGES, "metadata.languagesDetected");
   const warnings = arrayValue(metadata.warnings, "metadata.warnings", 200);
   warnings.forEach(validateWarning);
+  const warningKeys = warnings.map((warning) => {
+    const item2 = warning;
+    return `${item2.code}\0${item2.path ?? ""}`;
+  });
+  sortedUnique(warningKeys, "metadata.warnings");
   const warningsOmitted = integer(metadata.warningsOmitted, "metadata.warningsOmitted");
   const truncated = booleanValue(metadata.truncated, "metadata.truncated");
   const total = integer(metadata.totalAffectedSourceLocations, "metadata.totalAffectedSourceLocations");
@@ -1389,7 +1404,7 @@ var ImpactPlatformClient = class {
             accept: "application/json",
             authorization: `Bearer ${this.options.projectToken}`,
             "content-type": "application/json",
-            "user-agent": "alconite-impact-action/2.2.0-draft"
+            "user-agent": "alconite-impact-action/2.1.2-unreleased"
           },
           body,
           redirect: "manual",
@@ -1809,11 +1824,12 @@ function impactSummary(report) {
       "### Strongest returned evidence",
       "",
       markdownTable(
-        ["Change", "Source", "Confidence", "Evidence"],
+        ["Change", "Source", "Confidence", "Basis", "Evidence"],
         locations.slice(0, 25).map(({ change, source }) => [
           change.kind,
           `${source.file}:${source.line}:${source.column}`,
           source.confidence,
+          change.confidenceBasis.conditions.join(", "),
           source.evidence.map((evidence) => `${evidence.type}=${evidence.value}`).join(", ")
         ])
       ),
