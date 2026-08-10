@@ -12,6 +12,7 @@ const actionFiles = [
   'node-ci/action.yaml',
   'rust-ci/action.yaml',
   'runtime-verify/action.yml',
+  'impact/action.yml',
 ];
 const immutableAction = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*@[a-f0-9]{40}$/u;
 const packageManifest = JSON.parse(await fs.readFile('package.json', 'utf8'));
@@ -59,6 +60,44 @@ const runtimeOutputs = [
   'warning-operations', 'finding-count', 'replayed',
 ];
 for (const name of runtimeOutputs) assert.ok(runtime.outputs[name], `Runtime Verify output ${name} is missing`);
+
+const impact = parse(await fs.readFile(path.resolve('impact/action.yml'), 'utf8'));
+assert.equal(impact.runs.using, 'node24', 'the Impact component must use the Node 24 runtime');
+assert.equal(impact.runs.main, 'dist/index.js', 'the Impact entry point must use checked-in build output');
+await fs.access(path.resolve('impact', impact.runs.main));
+for (const name of ['project-id', 'project-token', 'check-id']) {
+  assert.equal(impact.inputs[name].required, true, `Impact input ${name} must remain required`);
+}
+assert.equal(impact.inputs['report-path'], undefined, 'Impact must not accept a caller-controlled report path');
+const impactInputs = [
+  'project-id', 'project-token', 'check-id', 'source-root', 'api-url', 'additional-ignore',
+  'include-generated-directories', 'timeout-seconds', 'attempts', 'fail-on-risk', 'fail-on-potential-risk',
+];
+assert.deepEqual(Object.keys(impact.inputs), impactInputs, 'Impact inputs must remain synchronized with its public contract');
+const impactOutputs = [
+  'check-id', 'overall-risk', 'overall-potential-risk', 'breaking-changes', 'affected-files',
+  'affected-source-locations', 'files-scanned', 'files-skipped', 'client-entries-visited',
+  'client-files-discovered', 'client-files-submitted', 'client-files-skipped', 'report-path',
+  'report-truncated', 'analysis-fingerprint',
+];
+assert.deepEqual(Object.keys(impact.outputs), impactOutputs, 'Impact outputs must remain synchronized with its public contract');
+
+const impactExample = parse(await fs.readFile(path.resolve('examples/impact.yml'), 'utf8'));
+const impactSteps = impactExample.jobs?.impact?.steps ?? [];
+const contractStep = impactSteps.find((step) => step.id === 'contract_guard');
+const impactStep = impactSteps.find((step) => step.id === 'impact');
+assert.ok(contractStep, 'the Impact workflow example must include the root Contract Guard step');
+assert.ok(impactStep, 'the Impact workflow example must include the additive Impact step');
+assert.equal(
+  impactStep.if,
+  "${{ always() && steps.contract_guard.outputs.check-id != '' }}",
+  'the Impact example must run after a gate failure only when Contract Guard emitted a check ID',
+);
+assert.equal(
+  impactStep.with['check-id'],
+  '${{ steps.contract_guard.outputs.check-id }}',
+  'the Impact example must chain the root Action check ID',
+);
 
 const workflowFiles = (await fs.readdir('.github/workflows'))
   .filter((filename) => filename.endsWith('.yml') || filename.endsWith('.yaml'))
