@@ -9,6 +9,7 @@ export interface StableIdentity {
   ino: bigint;
   mode: bigint;
   nlink: bigint;
+  ctimeNs: bigint;
 }
 
 export interface VerifiedDirectory {
@@ -38,10 +39,14 @@ export function stableIdentity(stats: BigIntStats, purpose: 'source' | 'report' 
     const code = purpose === 'report' ? 'unsupported_secure_report_filesystem' : 'unsupported_secure_source_filesystem';
     throw new ImpactActionError(code, `The runner filesystem does not expose stable identity required for secure ${purpose} handling.`);
   }
-  return { dev: stats.dev, ino: stats.ino, mode: stats.mode, nlink: stats.nlink };
+  return { dev: stats.dev, ino: stats.ino, mode: stats.mode, nlink: stats.nlink, ctimeNs: stats.ctimeNs };
 }
 
 export function sameIdentity(left: StableIdentity, right: StableIdentity): boolean {
+  return sameFilesystemObject(left, right) && left.ctimeNs === right.ctimeNs;
+}
+
+export function sameFilesystemObject(left: StableIdentity, right: StableIdentity): boolean {
   return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.nlink === right.nlink;
 }
 
@@ -107,7 +112,11 @@ export async function verifyAbsoluteDirectory(
 export async function assertDirectoryIdentity(directory: VerifiedDirectory, purpose: 'source' | 'report'): Promise<void> {
   const stats = await lstatBigInt(directory.path);
   const realPath = await fs.realpath(directory.path);
-  if (!stats.isDirectory() || stats.isSymbolicLink() || !sameIdentity(directory.identity, stableIdentity(stats, purpose)) || !samePath(realPath, directory.realPath)) {
+  const current = stableIdentity(stats, purpose);
+  const unchanged = purpose === 'report'
+    ? sameFilesystemObject(directory.identity, current)
+    : sameIdentity(directory.identity, current);
+  if (!stats.isDirectory() || stats.isSymbolicLink() || !unchanged || !samePath(realPath, directory.realPath)) {
     throw new ImpactActionError(
       purpose === 'report' ? 'unsupported_secure_report_filesystem' : 'source_race_detected',
       `The verified ${purpose} root changed during the operation.`,

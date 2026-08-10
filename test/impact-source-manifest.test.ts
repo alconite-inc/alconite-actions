@@ -102,6 +102,31 @@ test('fails the entire collection when a file identity changes between inspectio
   );
 });
 
+test('detects same-inode, same-size source mutation during an open-handle read', async () => {
+  const workspace = await temporaryWorkspace();
+  const filename = path.join(workspace, 'customer.ts');
+  await fs.writeFile(filename, 'const a = 1;\n');
+  let changed = false;
+  await assert.rejects(
+    collectSourceManifest({
+      workspace,
+      sourceRoot: '.',
+      includeGeneratedDirectories: false,
+      additionalIgnorePatterns: [],
+      deadline: deadline(),
+      hooks: {
+        afterFileRead: async (candidate) => {
+          if (candidate === filename && !changed) {
+            changed = true;
+            await fs.writeFile(filename, 'const b = 2;\n');
+          }
+        },
+      },
+    }),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'source_race_detected',
+  );
+});
+
 test('enforces count and byte limits without returning a partial manifest', async () => {
   const workspace = await temporaryWorkspace();
   await fs.writeFile(path.join(workspace, 'one.ts'), 'const one = 1;\n');

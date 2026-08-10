@@ -6,6 +6,7 @@ import { RISK_VALUES, type ImpactReport, type ImpactRisk } from './models';
 import {
   assertDirectoryIdentity,
   isContained,
+  sameFilesystemObject,
   sameIdentity,
   stableIdentity,
   verifyAbsoluteDirectory,
@@ -118,9 +119,11 @@ export async function writePrivateReport(
     await handle.sync();
     deadline.throwIfExpired();
     const afterWrite = await handle.stat({ bigint: true });
-    if (!afterWrite.isFile() || afterWrite.nlink !== 1n || !sameIdentity(createdIdentity, fileIdentity(afterWrite)) || afterWrite.size !== BigInt(bytes.length)) {
+    const afterWriteIdentity = fileIdentity(afterWrite);
+    if (!afterWrite.isFile() || afterWrite.nlink !== 1n || !sameFilesystemObject(createdIdentity, afterWriteIdentity) || afterWrite.size !== BigInt(bytes.length)) {
       throw new ImpactActionError('report_write_failed', 'The private Impact report changed while it was written.');
     }
+    createdIdentity = afterWriteIdentity;
     await handle.close();
     handle = undefined;
     const pathStats = await fs.lstat(filename, { bigint: true });

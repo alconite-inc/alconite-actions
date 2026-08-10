@@ -1474,9 +1474,12 @@ function stableIdentity(stats, purpose = "source") {
     const code = purpose === "report" ? "unsupported_secure_report_filesystem" : "unsupported_secure_source_filesystem";
     throw new ImpactActionError(code, `The runner filesystem does not expose stable identity required for secure ${purpose} handling.`);
   }
-  return { dev: stats.dev, ino: stats.ino, mode: stats.mode, nlink: stats.nlink };
+  return { dev: stats.dev, ino: stats.ino, mode: stats.mode, nlink: stats.nlink, ctimeNs: stats.ctimeNs };
 }
 function sameIdentity(left, right) {
+  return sameFilesystemObject(left, right) && left.ctimeNs === right.ctimeNs;
+}
+function sameFilesystemObject(left, right) {
   return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.nlink === right.nlink;
 }
 function samePath(left, right) {
@@ -1532,7 +1535,9 @@ async function verifyAbsoluteDirectory(requested, purpose, deadline) {
 async function assertDirectoryIdentity(directory, purpose) {
   const stats = await lstatBigInt(directory.path);
   const realPath = await import_node_fs2.promises.realpath(directory.path);
-  if (!stats.isDirectory() || stats.isSymbolicLink() || !sameIdentity(directory.identity, stableIdentity(stats, purpose)) || !samePath(realPath, directory.realPath)) {
+  const current = stableIdentity(stats, purpose);
+  const unchanged = purpose === "report" ? sameFilesystemObject(directory.identity, current) : sameIdentity(directory.identity, current);
+  if (!stats.isDirectory() || stats.isSymbolicLink() || !unchanged || !samePath(realPath, directory.realPath)) {
     throw new ImpactActionError(
       purpose === "report" ? "unsupported_secure_report_filesystem" : "source_race_detected",
       `The verified ${purpose} root changed during the operation.`
@@ -1730,9 +1735,11 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
     await handle.sync();
     deadline.throwIfExpired();
     const afterWrite = await handle.stat({ bigint: true });
-    if (!afterWrite.isFile() || afterWrite.nlink !== 1n || !sameIdentity(createdIdentity, fileIdentity(afterWrite)) || afterWrite.size !== BigInt(bytes.length)) {
+    const afterWriteIdentity = fileIdentity(afterWrite);
+    if (!afterWrite.isFile() || afterWrite.nlink !== 1n || !sameFilesystemObject(createdIdentity, afterWriteIdentity) || afterWrite.size !== BigInt(bytes.length)) {
       throw new ImpactActionError("report_write_failed", "The private Impact report changed while it was written.");
     }
+    createdIdentity = afterWriteIdentity;
     await handle.close();
     handle = void 0;
     const pathStats = await import_node_fs3.promises.lstat(filename, { bigint: true });
