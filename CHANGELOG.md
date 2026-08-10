@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Additive `impact/` Node 24 Action for check-linked API change impact analysis against Rust, Java, TypeScript, and JavaScript source in the checked-out workspace.
+- Strict `alconite.impact.report.v1` validation, authoritative-versus-client source accounting, detected and potential risk gates, bounded job summaries, and creation-only private report output.
+- Single-pass, Git-ignore-aware collection with deterministic ordering, fixed resource budgets, link/race protection, an overall Action deadline, and an explicit transient retry allowlist.
+
+### Security
+
+- Source and ignore files are never executed and are read through verified file handles with pre/open/post identity and containment checks; source contents, tokens, and host paths are not logged.
+- Impact reports are created exclusively below a verified `RUNNER_TEMP` root outside the workspace with private modes on supported Linux filesystems. Windows Node 24 lacks the portable no-follow/reparse/mode primitives required by this boundary and therefore fails closed.
+- Future v2 releases now verify and attest the checked-in `impact/dist` bundle; this unreleased implementation does not create a tag or release.
+
 ## [2.1.2] - 2026-08-08
 
 ### Fixed

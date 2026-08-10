@@ -1,0 +1,30 @@
+name: Contract impact
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  impact:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Contract Guard
+        id: contract_guard
+        uses: alconite-inc/alconite-actions@<immutable-sha>
+        with:
+          project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
+          project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
+          candidate-path: openapi/openapi.yaml
+      - name: Alconite Impact
+        id: impact
+        if: ${{ always() && steps.contract_guard.outputs.check-id != '' }}
+        uses: alconite-inc/alconite-actions/impact@<same-immutable-sha>
+        with:
+          project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
+          project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
+          check-id: ${{ steps.contract_guard.outputs.check-id }}
