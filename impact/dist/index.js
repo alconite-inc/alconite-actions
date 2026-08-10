@@ -1371,11 +1371,13 @@ var ImpactPlatformClient = class {
   options;
   fetchImplementation;
   async analyze(request) {
+    this.options.deadline.throwIfExpired();
     const body = JSON.stringify(request);
     const requestBytes = Buffer.byteLength(body, "utf8");
     if (requestBytes > MAX_REQUEST_BYTES) {
       throw new ImpactActionError("collection_limit_exceeded", `The encoded Impact request exceeds the ${MAX_REQUEST_BYTES}-byte limit.`);
     }
+    this.options.deadline.throwIfExpired();
     let lastNetworkError;
     for (let attempt = 1; attempt <= this.options.attempts; attempt += 1) {
       this.options.deadline.throwIfExpired();
@@ -1419,7 +1421,10 @@ var ImpactPlatformClient = class {
           });
         }
         const raw = await readBoundedJson(response, MAX_REPORT_BYTES);
-        return validateImpactReport(raw, this.options.projectId, this.options.checkId);
+        this.options.deadline.throwIfExpired();
+        const report = validateImpactReport(raw, this.options.projectId, this.options.checkId);
+        this.options.deadline.throwIfExpired();
+        return report;
       }
       if (response.status === 502 && attempt < this.options.attempts) {
         await response.body?.cancel().catch(() => void 0);
@@ -1469,10 +1474,10 @@ function stableIdentity(stats, purpose = "source") {
     const code = purpose === "report" ? "unsupported_secure_report_filesystem" : "unsupported_secure_source_filesystem";
     throw new ImpactActionError(code, `The runner filesystem does not expose stable identity required for secure ${purpose} handling.`);
   }
-  return { dev: stats.dev, ino: stats.ino, mode: stats.mode };
+  return { dev: stats.dev, ino: stats.ino, mode: stats.mode, nlink: stats.nlink };
 }
 function sameIdentity(left, right) {
-  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode;
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.nlink === right.nlink;
 }
 function samePath(left, right) {
   const normalize = (value) => process.platform === "win32" ? value.toLowerCase() : value;
@@ -1596,7 +1601,7 @@ async function readVerifiedFile(filename, workspace, maximumBytes, deadline, hoo
   deadline.throwIfExpired();
   await assertDirectoryIdentity(workspace, "source");
   const beforeStats = await lstatBigInt(filename);
-  if (!beforeStats.isFile() || beforeStats.isSymbolicLink()) {
+  if (!beforeStats.isFile() || beforeStats.isSymbolicLink() || beforeStats.nlink !== 1n) {
     throw new ImpactActionError("source_race_detected", "A selected source entry is a link or is not a regular file.");
   }
   const before = stableIdentity(beforeStats);
@@ -1612,7 +1617,7 @@ async function readVerifiedFile(filename, workspace, maximumBytes, deadline, hoo
   });
   try {
     const openedStats = await handle.stat({ bigint: true });
-    if (!openedStats.isFile() || !sameIdentity(before, stableIdentity(openedStats))) {
+    if (!openedStats.isFile() || openedStats.nlink !== 1n || !sameIdentity(before, stableIdentity(openedStats))) {
       throw new ImpactActionError("source_race_detected", "A selected source file changed before it was opened.");
     }
     const allocation = Math.min(maximumBytes + 1, Math.max(1, beforeSize + 1));
@@ -1628,7 +1633,7 @@ async function readVerifiedFile(filename, workspace, maximumBytes, deadline, hoo
     const openedAfter = await handle.stat({ bigint: true });
     const pathAfter = await lstatBigInt(filename);
     const afterReal = await import_node_fs2.promises.realpath(filename);
-    if (!openedAfter.isFile() || !pathAfter.isFile() || pathAfter.isSymbolicLink() || !sameIdentity(before, stableIdentity(openedAfter)) || !sameIdentity(before, stableIdentity(pathAfter)) || openedAfter.size !== beforeStats.size || pathAfter.size !== beforeStats.size || total !== beforeSize || !samePath(beforeReal, afterReal) || !isContained(workspace.realPath, afterReal)) {
+    if (!openedAfter.isFile() || !pathAfter.isFile() || pathAfter.isSymbolicLink() || openedAfter.nlink !== 1n || pathAfter.nlink !== 1n || !sameIdentity(before, stableIdentity(openedAfter)) || !sameIdentity(before, stableIdentity(pathAfter)) || openedAfter.size !== beforeStats.size || pathAfter.size !== beforeStats.size || total !== beforeSize || !samePath(beforeReal, afterReal) || !isContained(workspace.realPath, afterReal)) {
       throw new ImpactActionError("source_race_detected", "A selected source file changed while it was read.");
     }
     return { bytes: buffer.subarray(0, total), identity: before, size: total };
@@ -1660,7 +1665,7 @@ async function safeFailureCleanup(root, directory, filename, identity) {
     await assertDirectoryIdentity(root, "report");
     if (filename && identity) {
       const stats = await import_node_fs3.promises.lstat(filename, { bigint: true });
-      if (stats.isFile() && !stats.isSymbolicLink() && sameIdentity(identity, fileIdentity(stats))) {
+      if (stats.isFile() && !stats.isSymbolicLink() && stats.nlink === 1n && sameIdentity(identity, fileIdentity(stats))) {
         await import_node_fs3.promises.unlink(filename);
       }
     }
@@ -1687,6 +1692,7 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
   await assertDirectoryIdentity(root, "report");
   const bytes = Buffer.from(`${JSON.stringify(report)}
 `, "utf8");
+  deadline.throwIfExpired();
   let directory;
   let filename;
   let createdIdentity;
@@ -1710,7 +1716,7 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
       384
     );
     const opened = await handle.stat({ bigint: true });
-    if (!opened.isFile()) throw new ImpactActionError("report_write_failed", "The private Impact report destination is not a regular file.");
+    if (!opened.isFile() || opened.nlink !== 1n) throw new ImpactActionError("report_write_failed", "The private Impact report destination is not a regular private file.");
     createdIdentity = fileIdentity(opened);
     if ((Number(opened.mode) & 511) !== 384) {
       throw new ImpactActionError("unsupported_secure_report_filesystem", "The private Impact report file mode could not be enforced.");
@@ -1720,14 +1726,14 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
     await handle.sync();
     deadline.throwIfExpired();
     const afterWrite = await handle.stat({ bigint: true });
-    if (!afterWrite.isFile() || !sameIdentity(createdIdentity, fileIdentity(afterWrite)) || afterWrite.size !== BigInt(bytes.length)) {
+    if (!afterWrite.isFile() || afterWrite.nlink !== 1n || !sameIdentity(createdIdentity, fileIdentity(afterWrite)) || afterWrite.size !== BigInt(bytes.length)) {
       throw new ImpactActionError("report_write_failed", "The private Impact report changed while it was written.");
     }
     await handle.close();
     handle = void 0;
     const pathStats = await import_node_fs3.promises.lstat(filename, { bigint: true });
     const finalPath = await import_node_fs3.promises.realpath(filename);
-    if (!pathStats.isFile() || pathStats.isSymbolicLink() || !sameIdentity(createdIdentity, fileIdentity(pathStats)) || !isContained(directory.realPath, finalPath, false)) {
+    if (!pathStats.isFile() || pathStats.isSymbolicLink() || pathStats.nlink !== 1n || !sameIdentity(createdIdentity, fileIdentity(pathStats)) || !isContained(directory.realPath, finalPath, false)) {
       throw new ImpactActionError("report_write_failed", "The private Impact report failed final identity verification.");
     }
     await assertDirectoryIdentity(directory, "report");
@@ -1969,7 +1975,7 @@ async function addGitignore(directory, workspace, layers, accounting, limits, de
     if (code === "ENOENT") return;
     throw new ImpactActionError("source_file_read_failed", "A repository .gitignore could not be inspected securely.", { cause: error2 });
   }
-  if (stats.isSymbolicLink() || !stats.isFile()) {
+  if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1n) {
     throw new ImpactActionError("source_race_detected", "A repository .gitignore is a link or is not a regular file.");
   }
   const size = Number(stats.size);
@@ -2113,7 +2119,7 @@ async function collectSourceManifest(options) {
         continue;
       }
       accounting.discoverFile();
-      if (!stats.isFile()) {
+      if (!stats.isFile() || stats.nlink !== 1n) {
         accounting.skip("SYMLINK_OR_REPARSE");
         continue;
       }
