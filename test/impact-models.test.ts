@@ -33,6 +33,104 @@ test('accepts newer semantic engine versions without weakening the report schema
   assert.equal(report.engines.impactAnalysisEngineVersion, 24);
 });
 
+test('uses enum rank rather than decimal rank text for evidence ordering', async () => {
+  const raw = await fixture();
+  const change = (raw.changes as Array<Record<string, unknown>>)[0];
+  assert.ok(change);
+  const source = (change.affectedSources as Array<Record<string, unknown>>)[0];
+  assert.ok(source);
+  source.evidence = [
+    { type: 'HTTP_CALL', value: '/customers/{id}' },
+    { type: 'ENUM_REFERENCE', value: 'ACTIVE' },
+  ];
+  change.confidenceBasis = {
+    level: 'HIGH',
+    conditions: ['MATCHING_TYPE_MEMBER'],
+    evidenceTypes: ['HTTP_CALL', 'ENUM_REFERENCE'],
+    criticalRisk: null,
+  };
+  assert.equal(validateImpactReport(raw, PROJECT_ID, CHECK_ID).changes[0]?.affectedSources[0]?.evidence.length, 2);
+
+  source.evidence = [...(source.evidence as unknown[])].reverse();
+  assert.throws(() => validateImpactReport(raw, PROJECT_ID, CHECK_ID), /sorted and deduplicated/u);
+});
+
+test('accepts the platform Critical-risk basis and binds its observed counts', async () => {
+  const raw = await fixture();
+  const change = (raw.changes as Array<Record<string, unknown>>)[0];
+  assert.ok(change);
+  const subject = change.subject as Record<string, unknown>;
+  const schema = subject.schema as Record<string, unknown>;
+  schema.property = null;
+  change.kind = 'SCHEMA_REMOVED';
+  change.risk = 'CRITICAL';
+  const sources = Array.from({ length: 10 }, (_, index) => ({
+    file: `src/customer-${String(index).padStart(2, '0')}.ts`,
+    line: 2,
+    column: 3,
+    language: 'TYPESCRIPT',
+    confidence: 'HIGH',
+    evidence: [{ type: 'SCHEMA_NAME', value: 'Customer' }],
+  }));
+  change.affectedSources = sources;
+  change.affectedLocationCount = 10;
+  change.returnedAffectedLocationCount = 10;
+  change.omittedAffectedLocationCount = 0;
+  change.affectedFileCount = 10;
+  change.highConfidenceFileCount = 10;
+  change.confidenceBasis = {
+    level: 'HIGH',
+    conditions: ['EXACT_TYPE'],
+    evidenceTypes: ['SCHEMA_NAME'],
+    criticalRisk: {
+      destructiveRemoval: true,
+      requiredDistinctFiles: 10,
+      requiredHighConfidenceFiles: 5,
+      observedDistinctFiles: 10,
+      observedHighConfidenceFiles: 10,
+    },
+  };
+  raw.overallRisk = 'CRITICAL';
+  raw.affectedFiles = 10;
+  raw.affectedSourceLocations = 10;
+  const metadata = raw.metadata as Record<string, unknown>;
+  metadata.totalAffectedSourceLocations = 10;
+  metadata.returnedAffectedSourceLocations = 10;
+  const server = metadata.serverScan as Record<string, unknown>;
+  server.manifestEntriesSubmitted = 10;
+  server.filesAccepted = 10;
+  server.filesScanned = 10;
+  const client = metadata.clientCollection as Record<string, unknown>;
+  client.entriesVisited = 11;
+  client.filesDiscovered = 10;
+  client.filesSubmitted = 10;
+
+  const report = validateImpactReport(raw, PROJECT_ID, CHECK_ID);
+  assert.equal(report.overallRisk, 'CRITICAL');
+  assert.equal(report.changes[0]?.confidenceBasis.criticalRisk?.observedDistinctFiles, 10);
+
+  const inconsistent = await fixture();
+  const inconsistentChange = (inconsistent.changes as Array<Record<string, unknown>>)[0];
+  assert.ok(inconsistentChange);
+  inconsistentChange.risk = 'CRITICAL';
+  inconsistentChange.confidenceBasis = {
+    level: 'HIGH',
+    conditions: ['MATCHING_TYPE_MEMBER'],
+    evidenceTypes: ['SCHEMA_NAME', 'PROPERTY_REFERENCE'],
+    criticalRisk: {
+      destructiveRemoval: true,
+      requiredDistinctFiles: 10,
+      requiredHighConfidenceFiles: 5,
+      observedDistinctFiles: 10,
+      observedHighConfidenceFiles: 5,
+    },
+  };
+  assert.throws(
+    () => validateImpactReport(inconsistent, PROJECT_ID, CHECK_ID),
+    /observed counts disagree/u,
+  );
+});
+
 test('rejects unknown fields and unsupported future report schemas', async () => {
   const unknown = await fixture();
   unknown.secretSource = 'must not be accepted';

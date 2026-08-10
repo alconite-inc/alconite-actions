@@ -788,10 +788,13 @@ function sortedUnique(values, context) {
   for (let index = 1; index < values.length; index += 1) {
     const previous = values[index - 1];
     const current = values[index];
-    if (previous === void 0 || current === void 0 || previous.localeCompare(current) >= 0) {
+    if (previous === void 0 || current === void 0 || Buffer.compare(Buffer.from(previous), Buffer.from(current)) >= 0) {
       mismatch(`${context} must be sorted and deduplicated`);
     }
   }
+}
+function compareUtf8(left, right) {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 function canonicalUnique(values, canonical, context) {
   for (let index = 1; index < values.length; index += 1) {
@@ -990,11 +993,16 @@ function validateAffectedSource(value) {
   enumValue(item.confidence, "affected source.confidence", CONFIDENCE_SET);
   const evidence = arrayValue(item.evidence, "affected source.evidence", 12).map(validateEvidence);
   if (evidence.length === 0) mismatch("affected source.evidence must not be empty");
-  const evidenceKeys = evidence.map((entry) => `${EVIDENCE_TYPES.indexOf(entry.type)}\0${entry.value}`);
-  sortedUnique(evidenceKeys, "affected source.evidence");
+  for (let index = 1; index < evidence.length; index += 1) {
+    const left = evidence[index - 1];
+    const right = evidence[index];
+    if (!left || !right) mismatch("affected source.evidence ordering is invalid");
+    const comparison = EVIDENCE_TYPES.indexOf(left.type) - EVIDENCE_TYPES.indexOf(right.type) || compareUtf8(left.value, right.value);
+    if (comparison >= 0) mismatch("affected source.evidence must be sorted and deduplicated");
+  }
   return item;
 }
-function validateConfidenceBasis(value, confidence, risk) {
+function validateConfidenceBasis(value, confidence, risk, affectedFiles, highConfidenceFiles) {
   const item = record(value, "change.confidenceBasis", ["level", "conditions", "evidenceTypes", "criticalRisk"]);
   const level = item.level === null ? null : enumValue(item.level, "change.confidenceBasis.level", CONFIDENCE_SET);
   if (level !== confidence) mismatch("change.confidenceBasis.level disagrees with confidence");
@@ -1008,17 +1016,20 @@ function validateConfidenceBasis(value, confidence, risk) {
   if (risk === "CRITICAL" !== (item.criticalRisk !== null)) mismatch("criticalRisk basis disagrees with risk");
   if (item.criticalRisk !== null) {
     const critical = record(item.criticalRisk, "change.confidenceBasis.criticalRisk", [
-      "destructiveKind",
-      "minimumAffectedFiles",
-      "minimumHighConfidenceFiles",
-      "affectedFiles",
-      "highConfidenceFiles"
+      "destructiveRemoval",
+      "requiredDistinctFiles",
+      "requiredHighConfidenceFiles",
+      "observedDistinctFiles",
+      "observedHighConfidenceFiles"
     ]);
-    if (critical.destructiveKind !== true) mismatch("criticalRisk.destructiveKind must be true");
-    integer(critical.minimumAffectedFiles, "criticalRisk.minimumAffectedFiles", 10, 10);
-    integer(critical.minimumHighConfidenceFiles, "criticalRisk.minimumHighConfidenceFiles", 5, 5);
-    integer(critical.affectedFiles, "criticalRisk.affectedFiles", 10);
-    integer(critical.highConfidenceFiles, "criticalRisk.highConfidenceFiles", 5);
+    if (critical.destructiveRemoval !== true) mismatch("criticalRisk.destructiveRemoval must be true");
+    integer(critical.requiredDistinctFiles, "criticalRisk.requiredDistinctFiles", 10, 10);
+    integer(critical.requiredHighConfidenceFiles, "criticalRisk.requiredHighConfidenceFiles", 5, 5);
+    const observedFiles = integer(critical.observedDistinctFiles, "criticalRisk.observedDistinctFiles", 10);
+    const observedHighFiles = integer(critical.observedHighConfidenceFiles, "criticalRisk.observedHighConfidenceFiles", 5);
+    if (observedFiles !== affectedFiles || observedHighFiles !== highConfidenceFiles) {
+      mismatch("criticalRisk observed counts disagree with affected-source counts");
+    }
   }
 }
 function validateChange(value) {
@@ -1062,18 +1073,18 @@ function validateChange(value) {
   const potentialRisk = enumValue(item.potentialRisk, "change.potentialRisk", RISK_SET);
   const risk = enumValue(item.risk, "change.risk", RISK_SET);
   const confidence = item.confidence === null ? null : enumValue(item.confidence, "change.confidence", CONFIDENCE_SET);
-  validateConfidenceBasis(item.confidenceBasis, confidence, risk);
   const total = integer(item.affectedLocationCount, "change.affectedLocationCount");
   const returned = integer(item.returnedAffectedLocationCount, "change.returnedAffectedLocationCount");
   const omitted = integer(item.omittedAffectedLocationCount, "change.omittedAffectedLocationCount");
   const files = integer(item.affectedFileCount, "change.affectedFileCount");
   const highFiles = integer(item.highConfidenceFileCount, "change.highConfidenceFileCount");
+  validateConfidenceBasis(item.confidenceBasis, confidence, risk, files, highFiles);
   const sources = arrayValue(item.affectedSources, "change.affectedSources", 200).map(validateAffectedSource);
   for (let index = 1; index < sources.length; index += 1) {
     const left = sources[index - 1];
     const right = sources[index];
     if (!left || !right) mismatch("change.affectedSources ordering is invalid");
-    const comparison = left.file.localeCompare(right.file, "en") || SOURCE_LANGUAGES.indexOf(left.language) - SOURCE_LANGUAGES.indexOf(right.language) || left.line - right.line || left.column - right.column;
+    const comparison = compareUtf8(left.file, right.file) || SOURCE_LANGUAGES.indexOf(left.language) - SOURCE_LANGUAGES.indexOf(right.language) || left.line - right.line || left.column - right.column;
     if (comparison >= 0) mismatch("change.affectedSources must be sorted and deduplicated");
   }
   if (total !== returned + omitted || returned !== sources.length || files > total || highFiles > files) {
@@ -1616,7 +1627,7 @@ async function readVerifiedDirectory(directory, workspace, deadline, hooks = {},
     if (!afterStats.isDirectory() || afterStats.isSymbolicLink() || !sameIdentity(before, stableIdentity(afterStats)) || !sameIdentity(before, stableIdentity(handleStats)) || !samePath(beforeReal, afterReal) || !isContained(workspace.realPath, afterReal)) {
       throw new ImpactActionError("source_race_detected", "A source directory changed during enumeration.");
     }
-    return entries.sort((left, right) => left.name.localeCompare(right.name, "en"));
+    return entries.sort((left, right) => Buffer.compare(Buffer.from(left.name, "utf8"), Buffer.from(right.name, "utf8")));
   } finally {
     await handle?.close().catch(() => void 0);
   }
@@ -1899,7 +1910,7 @@ function validateAdditionalIgnorePatterns(patterns) {
     const pattern = original.trim();
     if (!pattern) continue;
     const bytes = Buffer.byteLength(pattern, "utf8");
-    if (bytes > 256 || pattern.startsWith("!") || pattern.startsWith("/") || pattern.includes("\\") || pattern.includes("\0") || pattern.split("/").some((component) => component === "..")) {
+    if (bytes > 256 || pattern.startsWith("!") || pattern.startsWith("/") || pattern.includes("\\") || pattern.includes("\0") || pattern.includes("..")) {
       invalid("additional-ignore contains an unsupported pattern; only bounded ignore-only workspace patterns are accepted");
     }
     result.push(pattern);
@@ -2179,7 +2190,7 @@ async function collectSourceManifest(options) {
     }
   };
   await walk(root.path);
-  files.sort((left, right) => left.path.localeCompare(right.path, "en"));
+  files.sort((left, right) => Buffer.compare(Buffer.from(left.path, "utf8"), Buffer.from(right.path, "utf8")));
   const languages = SOURCE_LANGUAGES.filter((language) => detected.has(language));
   return {
     logicalRoot,

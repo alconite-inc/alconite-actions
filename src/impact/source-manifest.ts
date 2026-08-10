@@ -112,7 +112,7 @@ export function validateAdditionalIgnorePatterns(patterns: string[]): string[] {
     const bytes = Buffer.byteLength(pattern, 'utf8');
     if (
       bytes > 256 || pattern.startsWith('!') || pattern.startsWith('/') || pattern.includes('\\') ||
-      pattern.includes('\0') || pattern.split('/').some((component) => component === '..')
+      pattern.includes('\0') || pattern.includes('..')
     ) {
       invalid('additional-ignore contains an unsupported pattern; only bounded ignore-only workspace patterns are accepted');
     }
@@ -416,7 +416,7 @@ export async function collectSourceManifest(options: SourceCollectionOptions): P
   };
 
   await walk(root.path);
-  files.sort((left, right) => left.path.localeCompare(right.path, 'en'));
+  files.sort((left, right) => Buffer.compare(Buffer.from(left.path, 'utf8'), Buffer.from(right.path, 'utf8')));
   const languages = SOURCE_LANGUAGES.filter((language) => detected.has(language));
   return {
     logicalRoot,

@@ -199,7 +199,7 @@ export async function readVerifiedDirectory(
     ) {
       throw new ImpactActionError('source_race_detected', 'A source directory changed during enumeration.');
     }
-    return entries.sort((left, right) => left.name.localeCompare(right.name, 'en'));
+    return entries.sort((left, right) => Buffer.compare(Buffer.from(left.name, 'utf8'), Buffer.from(right.name, 'utf8')));
   } finally {
     await handle?.close().catch(() => undefined);
   }

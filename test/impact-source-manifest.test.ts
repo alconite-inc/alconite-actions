@@ -348,7 +348,7 @@ test('strictly validates the source root and ignore-only patterns', () => {
     assert.throws(() => validatePortableRoot(unsafe), /source-root/u);
   }
   assert.deepEqual(validateAdditionalIgnorePatterns(['examples/**', '', ' fixtures/** ']), ['examples/**', 'fixtures/**']);
-  for (const unsafe of ['!include.ts', '/rooted', '../outside', 'a\\b']) {
+  for (const unsafe of ['!include.ts', '/rooted', '../outside', 'a\\b', 'file..backup.ts']) {
     assert.throws(() => validateAdditionalIgnorePatterns([unsafe]), /unsupported pattern/u);
   }
 });
