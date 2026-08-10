@@ -379,3 +379,16 @@ test('cannot bypass fixed directory denial by selecting it as source-root', asyn
     /metadata directory/u,
   );
 });
+
+test('requires GITHUB_WORKSPACE to be an absolute verified directory', async () => {
+  await assert.rejects(
+    collectSourceManifest({
+      workspace: 'relative-workspace',
+      sourceRoot: '.',
+      includeGeneratedDirectories: false,
+      additionalIgnorePatterns: [],
+      deadline: deadline(),
+    }),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'unsupported_secure_source_filesystem',
+  );
+});

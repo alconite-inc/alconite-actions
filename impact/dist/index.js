@@ -1708,8 +1708,8 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
       "Secure Impact report creation is unavailable on this Windows Node filesystem; use a supported Linux runner."
     );
   }
-  const workspace = await verifyAbsoluteDirectory(import_node_path2.default.resolve(workspacePath), "source", deadline);
-  const root = await verifyAbsoluteDirectory(import_node_path2.default.resolve(runnerTemp), "report", deadline);
+  const workspace = await verifyAbsoluteDirectory(workspacePath, "source", deadline);
+  const root = await verifyAbsoluteDirectory(runnerTemp, "report", deadline);
   if (isContained(workspace.realPath, root.realPath)) {
     throw new ImpactActionError("unsupported_secure_report_filesystem", "RUNNER_TEMP must resolve outside GITHUB_WORKSPACE.");
   }
@@ -1730,6 +1730,7 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
       throw new ImpactActionError("unsupported_secure_report_filesystem", "The private Impact report directory failed mode or containment verification.");
     }
     await assertDirectoryIdentity(root, "report");
+    await hooks.afterDirectoryCreated?.(directory.path);
     filename = import_node_path2.default.join(directory.path, "impact-report.json");
     if (typeof import_node_fs3.constants.O_NOFOLLOW !== "number") {
       throw new ImpactActionError("unsupported_secure_report_filesystem", "The runner does not expose O_NOFOLLOW for private report creation.");
@@ -2065,7 +2066,7 @@ async function collectSourceManifest(options) {
   const patterns = validateAdditionalIgnorePatterns(options.additionalIgnorePatterns);
   const limits = mergedLimits(options.limits);
   const hooks = options.hooks ?? {};
-  const workspace = await verifyAbsoluteDirectory(import_node_path3.default.resolve(options.workspace), "source", options.deadline);
+  const workspace = await verifyAbsoluteDirectory(options.workspace, "source", options.deadline);
   const requestedRoot = logicalRoot === "." ? workspace.path : import_node_path3.default.resolve(workspace.path, ...logicalRoot.split("/"));
   const root = await verifyAbsoluteDirectory(requestedRoot, "source", options.deadline);
   if (!isContained(workspace.realPath, root.realPath)) invalid("source-root must remain inside GITHUB_WORKSPACE");

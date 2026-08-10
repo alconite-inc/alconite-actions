@@ -18,6 +18,7 @@ import { markdownTable } from '../github';
 export type RiskThreshold = 'never' | 'low' | 'medium' | 'high' | 'critical';
 
 export interface ReportWriteHooks {
+  afterDirectoryCreated?: (directory: string) => Promise<void>;
   afterFileCreated?: (filename: string) => Promise<void>;
 }
 
@@ -78,8 +79,8 @@ export async function writePrivateReport(
       'Secure Impact report creation is unavailable on this Windows Node filesystem; use a supported Linux runner.',
     );
   }
-  const workspace = await verifyAbsoluteDirectory(path.resolve(workspacePath), 'source', deadline);
-  const root = await verifyAbsoluteDirectory(path.resolve(runnerTemp), 'report', deadline);
+  const workspace = await verifyAbsoluteDirectory(workspacePath, 'source', deadline);
+  const root = await verifyAbsoluteDirectory(runnerTemp, 'report', deadline);
   if (isContained(workspace.realPath, root.realPath)) {
     throw new ImpactActionError('unsupported_secure_report_filesystem', 'RUNNER_TEMP must resolve outside GITHUB_WORKSPACE.');
   }
@@ -99,6 +100,7 @@ export async function writePrivateReport(
       throw new ImpactActionError('unsupported_secure_report_filesystem', 'The private Impact report directory failed mode or containment verification.');
     }
     await assertDirectoryIdentity(root, 'report');
+    await hooks.afterDirectoryCreated?.(directory.path);
     filename = path.join(directory.path, 'impact-report.json');
     if (typeof constants.O_NOFOLLOW !== 'number') {
       throw new ImpactActionError('unsupported_secure_report_filesystem', 'The runner does not expose O_NOFOLLOW for private report creation.');

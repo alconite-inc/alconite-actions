@@ -310,7 +310,7 @@ export async function collectSourceManifest(options: SourceCollectionOptions): P
   const patterns = validateAdditionalIgnorePatterns(options.additionalIgnorePatterns);
   const limits = mergedLimits(options.limits);
   const hooks = options.hooks ?? {};
-  const workspace = await verifyAbsoluteDirectory(path.resolve(options.workspace), 'source', options.deadline);
+  const workspace = await verifyAbsoluteDirectory(options.workspace, 'source', options.deadline);
   const requestedRoot = logicalRoot === '.'
     ? workspace.path
     : path.resolve(workspace.path, ...logicalRoot.split('/'));

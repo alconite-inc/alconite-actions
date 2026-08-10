@@ -98,15 +98,48 @@ test('retries only explicit busy/storage errors and gateway responses without an
   requests = 0;
   const gatewayFetch: typeof fetch = async () => {
     requests += 1;
-    if (requests === 1) return new Response('gateway timeout', { status: 504 });
+    if (requests === 1) return new Response('gateway timeout', { status: 504, headers: { 'retry-after': '0' } });
     return new Response(JSON.stringify(await fixture()), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   await client(gatewayFetch, 2).analyze(request());
   assert.equal(requests, 2);
+
+  requests = 0;
+  const gateway502Fetch: typeof fetch = async () => {
+    requests += 1;
+    if (requests === 1) return new Response('bad gateway', { status: 502, headers: { 'retry-after': '0' } });
+    return new Response(JSON.stringify(await fixture()), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  await client(gateway502Fetch, 2).analyze(request());
+  assert.equal(requests, 2);
+
+  requests = 0;
+  const storageFetch: typeof fetch = async () => {
+    requests += 1;
+    if (requests === 1) {
+      return new Response(JSON.stringify({ error: { code: 'impact_storage_unavailable', message: 'Storage unavailable.' } }), {
+        status: 503,
+        headers: { 'content-type': 'application/json', 'retry-after': '0' },
+      });
+    }
+    return new Response(JSON.stringify(await fixture()), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  await client(storageFetch, 2).analyze(request());
+  assert.equal(requests, 2);
 });
 
 test('does not retry deterministic timeout, disabled, or other valid Impact errors', async () => {
-  for (const [status, code] of [[504, 'impact_analysis_timeout'], [503, 'impact_disabled'], [422, 'impact_delta_limit']] as const) {
+  for (const [status, code] of [
+    [401, 'invalid_token'],
+    [403, 'insufficient_token_scope'],
+    [409, 'impact_check_incomplete'],
+    [410, 'impact_contract_artifacts_unavailable'],
+    [413, 'impact_payload_too_large'],
+    [422, 'impact_delta_limit'],
+    [500, 'impact_internal_error'],
+    [503, 'impact_disabled'],
+    [504, 'impact_analysis_timeout'],
+  ] as const) {
     let requests = 0;
     const mockFetch: typeof fetch = async () => {
       requests += 1;
@@ -151,6 +184,19 @@ test('never sleeps past the remaining overall deadline', async () => {
   });
   await assert.rejects(
     client(async () => { throw new TypeError('offline'); }, 3, deadline).analyze(request()),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'action_deadline_exceeded',
+  );
+
+  let headerNow = 0;
+  const headerDeadline = new ActionDeadline(1_000, {
+    now: () => headerNow,
+    sleep: async (milliseconds) => { headerNow += milliseconds; },
+  });
+  await assert.rejects(
+    client(async () => new Response(JSON.stringify({ error: { code: 'impact_analysis_busy', message: 'Busy.' } }), {
+      status: 429,
+      headers: { 'content-type': 'application/json', 'retry-after': '2' },
+    }), 2, headerDeadline).analyze(request()),
     (error: unknown) => error instanceof ImpactActionError && error.code === 'action_deadline_exceeded',
   );
 });

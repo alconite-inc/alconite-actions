@@ -100,6 +100,31 @@ test('removes only its verified empty invocation directory when report creation 
   assert.deepEqual(await fs.readdir(workspace), []);
 });
 
+test('fails closed when the exclusive destination name or path identity is raced', async () => {
+  const { workspace, runner } = await roots();
+  const report = await fixture();
+  if (process.platform === 'win32') return;
+  await assert.rejects(
+    writePrivateReport(report, runner, workspace, new ActionDeadline(30_000), {
+      afterDirectoryCreated: async (directory) => {
+        await fs.writeFile(path.join(directory, 'impact-report.json'), 'attacker-controlled');
+      },
+    }),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'report_write_failed',
+  );
+
+  const secondRoots = await roots();
+  await assert.rejects(
+    writePrivateReport(report, secondRoots.runner, secondRoots.workspace, new ActionDeadline(30_000), {
+      afterFileCreated: async (filename) => {
+        await fs.rename(filename, `${filename}.original`);
+        await fs.writeFile(filename, 'replacement');
+      },
+    }),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'report_write_failed',
+  );
+});
+
 test('refuses a report root inside the workspace', async () => {
   const { workspace } = await roots();
   const nested = path.join(workspace, 'runner-temp');
@@ -110,3 +135,10 @@ test('refuses a report root inside the workspace', async () => {
   );
 });
 
+test('requires RUNNER_TEMP to be absolute rather than resolving a caller-controlled relative path', async () => {
+  const { workspace } = await roots();
+  await assert.rejects(
+    writePrivateReport(await fixture(), 'relative-runner-temp', workspace, new ActionDeadline(30_000)),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'unsupported_secure_report_filesystem',
+  );
+});
