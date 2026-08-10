@@ -159,7 +159,14 @@ export async function readVerifiedDirectory(
   try {
     handle = await openVerifiedDirectoryHandle(directory, before);
     const entries: Dirent[] = [];
-    const openedDirectory = await fs.opendir(directory);
+    // On Linux, enumerate through the already verified descriptor instead of ambiently reopening
+    // the raced pathname. Windows Node exposes no directory descriptor primitive, so it uses the
+    // documented pre/opendir/post identity and final-path fail-closed checks.
+    const enumerationPath = handle ? `/proc/self/fd/${handle.fd}` : directory;
+    const openedDirectory = await fs.opendir(enumerationPath).catch((error: unknown) => {
+      if (handle) sourceUnsupported('The Linux runner does not expose descriptor-relative directory enumeration through /proc/self/fd.');
+      throw error;
+    });
     try {
       for await (const entry of openedDirectory) {
         if (entries.length >= maximumEntries) {

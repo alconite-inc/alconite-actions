@@ -1573,7 +1573,11 @@ async function readVerifiedDirectory(directory, workspace, deadline, hooks = {},
   try {
     handle = await openVerifiedDirectoryHandle(directory, before);
     const entries = [];
-    const openedDirectory = await import_node_fs2.promises.opendir(directory);
+    const enumerationPath = handle ? `/proc/self/fd/${handle.fd}` : directory;
+    const openedDirectory = await import_node_fs2.promises.opendir(enumerationPath).catch((error2) => {
+      if (handle) sourceUnsupported("The Linux runner does not expose descriptor-relative directory enumeration through /proc/self/fd.");
+      throw error2;
+    });
     try {
       for await (const entry of openedDirectory) {
         if (entries.length >= maximumEntries) {
