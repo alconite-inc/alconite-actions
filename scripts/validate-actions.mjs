@@ -74,6 +74,19 @@ const impactInputs = [
   'include-generated-directories', 'timeout-seconds', 'attempts', 'fail-on-risk', 'fail-on-potential-risk',
 ];
 assert.deepEqual(Object.keys(impact.inputs), impactInputs, 'Impact inputs must remain synchronized with its public contract');
+const impactDefaults = {
+  'source-root': '.',
+  'api-url': 'https://alconite.com',
+  'additional-ignore': '',
+  'include-generated-directories': 'false',
+  'timeout-seconds': '120',
+  attempts: '3',
+  'fail-on-risk': 'never',
+  'fail-on-potential-risk': 'never',
+};
+for (const [name, expected] of Object.entries(impactDefaults)) {
+  assert.equal(String(impact.inputs[name].default), expected, `Impact input ${name} has an unexpected default`);
+}
 const impactOutputs = [
   'check-id', 'overall-risk', 'overall-potential-risk', 'breaking-changes', 'affected-files',
   'affected-source-locations', 'files-scanned', 'files-skipped', 'client-entries-visited',

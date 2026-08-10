@@ -7,6 +7,7 @@ import { ActionDeadline } from '../src/impact/deadline';
 import { ImpactActionError } from '../src/impact/errors';
 import {
   collectSourceManifest,
+  DEFAULT_SOURCE_COLLECTION_LIMITS,
   validateAdditionalIgnorePatterns,
   validatePortableRoot,
 } from '../src/impact/source-manifest';
@@ -26,6 +27,22 @@ async function temporaryWorkspace(): Promise<string> {
 function deadline(): ActionDeadline {
   return new ActionDeadline(30_000);
 }
+
+test('locks the Standard Action source-collection profile', () => {
+  assert.deepEqual(DEFAULT_SOURCE_COLLECTION_LIMITS, {
+    maximumEntriesVisited: 20_000,
+    maximumDirectoriesVisited: 5_000,
+    maximumGitignoreFiles: 128,
+    maximumGitignoreBytes: 512 * 1024,
+    maximumGitignorePatterns: 10_000,
+    maximumSubmittedFiles: 2_000,
+    maximumManifestEntries: 2_500,
+    maximumFileBytes: 512 * 1024,
+    maximumTotalSourceBytes: 16 * 1024 * 1024,
+    maximumPathBytes: 512,
+    maximumDepth: 32,
+  });
+});
 
 test('collects supported files once with fixed, gitignore, nested, additional, binary, and unsupported accounting', async () => {
   const workspace = await temporaryWorkspace();

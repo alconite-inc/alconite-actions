@@ -4,9 +4,10 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { ActionDeadline } from '../src/impact/deadline';
 import { ImpactActionError } from '../src/impact/errors';
-import type { ImpactRequest } from '../src/impact/models';
+import { MAX_REPORT_BYTES, type ImpactRequest } from '../src/impact/models';
 import {
   ImpactPlatformClient,
+  MAX_REQUEST_BYTES,
   validateApiUrl,
   validateCheckId,
   validateProjectId,
@@ -56,6 +57,11 @@ function client(fetchImplementation: typeof fetch, attempts = 1, deadline = new 
     fetchImplementation,
   });
 }
+
+test('locks the Standard Action wire profiles', () => {
+  assert.equal(MAX_REQUEST_BYTES, 24 * 1024 * 1024);
+  assert.equal(MAX_REPORT_BYTES, 8 * 1024 * 1024);
+});
 
 test('posts the strict check-linked request with masked-token-compatible bearer handling', async () => {
   let observedUrl = '';
@@ -161,4 +167,3 @@ test('validates IDs, tokens, and HTTPS/loopback URL rules strictly', () => {
   assert.throws(() => validateApiUrl('http://example.com'));
   assert.throws(() => validateApiUrl('https://user:secret@alconite.com'));
 });
-
