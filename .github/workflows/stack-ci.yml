@@ -131,7 +131,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: alconite-inc/alconite-actions/java-ci@v2.0.0
+      - uses: alconite-inc/alconite-actions/java-ci@v2.1.2
         with:
           java-version: ${{ inputs.java-version }}
           packages-token: ${{ github.event_name == 'pull_request' && '' || secrets.packages-token }}
@@ -148,7 +148,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: alconite-inc/alconite-actions/node-ci@v2.0.0
+      - uses: alconite-inc/alconite-actions/node-ci@v2.1.2
         with:
           node-version: ${{ inputs.node-version }}
           packages-token: ${{ github.event_name == 'pull_request' && '' || secrets.packages-token }}
@@ -164,7 +164,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: alconite-inc/alconite-actions/rust-ci@v2.0.0
+      - uses: alconite-inc/alconite-actions/rust-ci@v2.1.2
 
   docker-build:
     name: Docker build
@@ -177,7 +177,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: alconite-inc/alconite-actions/docker-ci@v2.0.0
+      - uses: alconite-inc/alconite-actions/docker-ci@v2.1.2
         with:
           image: ${{ inputs.docker-image }}
           push: "false"
@@ -198,7 +198,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: alconite-inc/alconite-actions@v2.0.0
+      - uses: alconite-inc/alconite-actions@v2.1.2
         with:
           project-id: ${{ inputs.contract-guard-project-id }}
           project-token: ${{ secrets.contract-guard-token }}
@@ -227,7 +227,7 @@ jobs:
           persist-credentials: false
       - name: Build and publish image
         id: image
-        uses: alconite-inc/alconite-actions/docker-ci@v2.0.0
+        uses: alconite-inc/alconite-actions/docker-ci@v2.1.2
         with:
           image: ${{ inputs.docker-image }}
           push: "true"
@@ -250,7 +250,7 @@ jobs:
     env:
       DISCORD_WEBHOOK: ${{ secrets.discord-webhook }}
     steps:
-      - uses: alconite-inc/alconite-actions/discord-notify@v2.0.0
+      - uses: alconite-inc/alconite-actions/discord-notify@v2.1.2
         if: ${{ env.DISCORD_WEBHOOK != '' }}
         with:
           webhook-url: ${{ env.DISCORD_WEBHOOK }}
