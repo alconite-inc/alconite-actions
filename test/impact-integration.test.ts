@@ -28,7 +28,9 @@ test('runs the compiled Impact Action against a local mock without logging sourc
   await fs.writeFile(path.join(workspace, 'customer.ts'), `interface Customer { firstName: string } // ${SOURCE_MARKER}\n`);
   await fs.writeFile(outputPath, '');
   await fs.writeFile(summaryPath, '');
-  const baseReport = JSON.parse(await fs.readFile(path.resolve('test/fixtures/impact-report-v1.json'), 'utf8')) as Record<string, unknown>;
+  const baseReport = JSON.parse(
+    await fs.readFile(path.resolve('test/fixtures/impact-report-v1-single-file.json'), 'utf8'),
+  ) as Record<string, unknown>;
   let observedRequest = false;
 
   const server = createServer((request, response) => {

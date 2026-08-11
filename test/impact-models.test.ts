@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -12,16 +13,26 @@ import {
 
 const PROJECT_ID = 'cgprj_11111111111111111111111111111111';
 const CHECK_ID = 'cgchk_22222222222222222222222222222222';
+const PLATFORM_PROJECT_ID = 'cgprj_00000000000000000000000000000000';
+const PLATFORM_CHECK_ID = 'cgchk_11111111111111111111111111111111';
 
 async function fixture(): Promise<Record<string, unknown>> {
-  return JSON.parse(await fs.readFile(path.resolve('test/fixtures/impact-report-v1.json'), 'utf8')) as Record<string, unknown>;
+  return JSON.parse(await fs.readFile(path.resolve('test/fixtures/impact-report-v1-single-file.json'), 'utf8')) as Record<string, unknown>;
 }
 
+test('locks the byte-for-byte platform-generated report fixture provenance', async () => {
+  const bytes = await fs.readFile(path.resolve('test/fixtures/impact-report-v1.json'));
+  const expected = (await fs.readFile(path.resolve('test/fixtures/impact-report-v1.sha256'), 'utf8')).trim();
+  assert.match(expected, /^[a-f0-9]{64}$/u);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), expected);
+});
+
 test('strictly validates the synchronized Impact report v1 fixture', async () => {
-  const report = validateImpactReport(await fixture(), PROJECT_ID, CHECK_ID);
+  const raw = JSON.parse(await fs.readFile(path.resolve('test/fixtures/impact-report-v1.json'), 'utf8')) as unknown;
+  const report = validateImpactReport(raw, PLATFORM_PROJECT_ID, PLATFORM_CHECK_ID);
   assert.equal(report.schemaVersion, IMPACT_REPORT_SCHEMA_VERSION);
-  assert.equal(report.overallRisk, 'HIGH');
-  assert.equal(report.changes[0]?.subject.schema?.property, 'firstName');
+  assert.equal(report.overallRisk, 'CRITICAL');
+  assert.equal(report.changes[0]?.subject.operation?.path, '/customers/{id}');
   assert.equal(report.changes[0]?.affectedSources[0]?.evidence.length, 2);
   assert.equal(CHANGE_KINDS.length, 47);
   assert.ok(CHANGE_KINDS.includes('REQUIRED_REQUEST_BODY_ADDED'));
@@ -37,6 +48,31 @@ test('accepts newer semantic engine versions without weakening the report schema
   engines.impactAnalysisEngineVersion = 24;
   const report = validateImpactReport(raw, PROJECT_ID, CHECK_ID);
   assert.equal(report.engines.impactAnalysisEngineVersion, 24);
+});
+
+test('treats future engine risk and confidence semantics as versioned data', async () => {
+  const future = await fixture();
+  const engines = future.engines as Record<string, unknown>;
+  engines.impactAnalysisEngineVersion = 2;
+  const change = (future.changes as Array<Record<string, unknown>>)[0];
+  assert.ok(change);
+  change.risk = 'MEDIUM';
+  change.confidence = 'LOW';
+  change.highConfidenceFileCount = 0;
+  const source = (change.affectedSources as Array<Record<string, unknown>>)[0];
+  assert.ok(source);
+  source.confidence = 'LOW';
+  change.confidenceBasis = {
+    level: 'LOW',
+    conditions: ['MATCHING_TYPE_MEMBER'],
+    evidenceTypes: ['SCHEMA_NAME', 'PROPERTY_REFERENCE'],
+    criticalRisk: null,
+  };
+  future.overallRisk = 'MEDIUM';
+  assert.equal(validateImpactReport(future, PROJECT_ID, CHECK_ID).overallRisk, 'MEDIUM');
+
+  engines.impactAnalysisEngineVersion = 1;
+  assert.throws(() => validateImpactReport(future, PROJECT_ID, CHECK_ID), /engine v1|v1 conditions/u);
 });
 
 test('uses enum rank rather than decimal rank text for evidence ordering', async () => {
@@ -122,6 +158,7 @@ test('accepts the platform Critical-risk basis and binds its observed counts', a
   const futureBasis = (futureChange?.confidenceBasis as Record<string, unknown>).criticalRisk as Record<string, unknown>;
   futureBasis.requiredDistinctFiles = 7;
   futureBasis.requiredHighConfidenceFiles = 3;
+  futureBasis.destructiveRemoval = false;
   assert.equal(validateImpactReport(futureThresholds, PROJECT_ID, CHECK_ID).overallRisk, 'CRITICAL');
   futureEngines.impactAnalysisEngineVersion = 1;
   assert.throws(() => validateImpactReport(futureThresholds, PROJECT_ID, CHECK_ID), /engine v1/u);
@@ -187,6 +224,44 @@ test('recomputes v1 confidence from the compact basis', async () => {
   isolatedBasis.conditions = ['ISOLATED_SCHEMA'];
   isolatedBasis.evidenceTypes = ['SCHEMA_NAME'];
   assert.equal(validateImpactReport(isolated, PROJECT_ID, CHECK_ID).changes[0]?.confidence, 'LOW');
+});
+
+test('accepts a LOW v1 compact basis unioned from independent LOW locations', async () => {
+  const raw = await fixture();
+  const change = (raw.changes as Array<Record<string, unknown>>)[0];
+  assert.ok(change);
+  const first = (change.affectedSources as Array<Record<string, unknown>>)[0];
+  assert.ok(first);
+  first.confidence = 'LOW';
+  first.evidence = [{ type: 'SCHEMA_NAME', value: 'Customer' }];
+  change.affectedSources = [
+    first,
+    {
+      file: 'src/other.ts',
+      line: 4,
+      column: 5,
+      language: 'TYPESCRIPT',
+      confidence: 'LOW',
+      evidence: [{ type: 'PROPERTY_REFERENCE', value: 'firstName' }],
+    },
+  ];
+  change.confidence = 'LOW';
+  change.confidenceBasis = {
+    level: 'LOW',
+    conditions: ['UNIQUE_UNQUALIFIED_PROPERTY', 'ISOLATED_SCHEMA'],
+    evidenceTypes: ['SCHEMA_NAME', 'PROPERTY_REFERENCE'],
+    criticalRisk: null,
+  };
+  change.affectedLocationCount = 2;
+  change.returnedAffectedLocationCount = 2;
+  change.affectedFileCount = 2;
+  change.highConfidenceFileCount = 0;
+  raw.affectedFiles = 2;
+  raw.affectedSourceLocations = 2;
+  const metadata = raw.metadata as Record<string, unknown>;
+  metadata.totalAffectedSourceLocations = 2;
+  metadata.returnedAffectedSourceLocations = 2;
+  assert.equal(validateImpactReport(raw, PROJECT_ID, CHECK_ID).changes[0]?.confidence, 'LOW');
 });
 
 test('enforces exact security-requirement and analyzer subject shapes', async () => {
@@ -337,6 +412,22 @@ test('rejects subject, count, evidence, and project binding inconsistencies', as
   const wrongCount = await fixture();
   wrongCount.affectedSourceLocations = 2;
   assert.throws(() => validateImpactReport(wrongCount, PROJECT_ID, CHECK_ID), /affectedSourceLocations is inconsistent/u);
+
+  const impossibleFileCounts = await fixture();
+  const impossibleChange = (impossibleFileCounts.changes as Array<Record<string, unknown>>)[0];
+  assert.ok(impossibleChange);
+  impossibleChange.affectedFileCount = 0;
+  impossibleChange.highConfidenceFileCount = 0;
+  assert.throws(() => validateImpactReport(impossibleFileCounts, PROJECT_ID, CHECK_ID), /affected-source counts/u);
+
+  const understatedConfidence = await fixture();
+  const understatedChange = (understatedConfidence.changes as Array<Record<string, unknown>>)[0];
+  assert.ok(understatedChange);
+  understatedChange.confidence = 'MEDIUM';
+  const understatedBasis = understatedChange.confidenceBasis as Record<string, unknown>;
+  understatedBasis.level = 'MEDIUM';
+  understatedBasis.conditions = ['EXACT_TYPE'];
+  assert.throws(() => validateImpactReport(understatedConfidence, PROJECT_ID, CHECK_ID), /complete affected-source counts/u);
 
   const wrongEvidenceOrder = await fixture();
   const source = (((wrongEvidenceOrder.changes as Array<Record<string, unknown>>)[0]?.affectedSources as Array<Record<string, unknown>>)[0]);

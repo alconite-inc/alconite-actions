@@ -309,11 +309,11 @@ export async function collectSourceManifest(options: SourceCollectionOptions): P
   const patterns = validateAdditionalIgnorePatterns(options.additionalIgnorePatterns);
   const limits = mergedLimits(options.limits);
   const hooks = options.hooks ?? {};
-  const workspace = await verifyAbsoluteDirectory(options.workspace, 'source', options.deadline);
+  const workspace = await verifyAbsoluteDirectory(options.workspace, 'source', options.deadline, hooks);
   const requestedRoot = logicalRoot === '.'
     ? workspace.path
     : path.resolve(workspace.path, ...logicalRoot.split('/'));
-  const root = await verifyAbsoluteDirectory(requestedRoot, 'source', options.deadline);
+  const root = await verifyAbsoluteDirectory(requestedRoot, 'source', options.deadline, hooks);
   if (!isContained(workspace.realPath, root.realPath)) invalid('source-root must remain inside GITHUB_WORKSPACE');
 
   const accounting = new CollectionAccounting(limits);

@@ -27,4 +27,3 @@ export class ImpactActionError extends Error {
     this.platformCode = options.platformCode;
   }
 }
-

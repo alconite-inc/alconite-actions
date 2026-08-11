@@ -205,7 +205,7 @@ export interface ImpactChange {
     conditions: Array<(typeof CONFIDENCE_CONDITIONS)[number]>;
     evidenceTypes: ImpactEvidenceType[];
     criticalRisk: null | {
-      destructiveRemoval: true;
+      destructiveRemoval: boolean;
       requiredDistinctFiles: number;
       requiredHighConfidenceFiles: number;
       observedDistinctFiles: number;
@@ -554,12 +554,22 @@ function validateConfidenceBasis(
   }
   if (confidence !== null) {
     if (evidenceTypes.length === 0) mismatch('non-empty confidence requires evidence types');
-    const computedLevel: ImpactConfidence = conditions.some((condition) => HIGH_CONFIDENCE_CONDITION_SET.has(condition))
-      ? 'HIGH'
-      : conditions.some((condition) => MEDIUM_CONFIDENCE_CONDITION_SET.has(condition)) || evidenceTypes.length >= 2
-        ? 'MEDIUM'
-        : 'LOW';
-    if (level !== computedLevel) mismatch('change.confidenceBasis.level disagrees with its v1 conditions and evidence types');
+    if (impactEngineVersion === 1) {
+      const hasHighCondition = conditions.some((condition) => HIGH_CONFIDENCE_CONDITION_SET.has(condition));
+      const hasMediumCondition = conditions.some((condition) => MEDIUM_CONFIDENCE_CONDITION_SET.has(condition));
+      if (hasHighCondition && level !== 'HIGH') {
+        mismatch('change.confidenceBasis.level disagrees with its v1 conditions and evidence types');
+      }
+      if (!hasHighCondition && hasMediumCondition && level !== 'MEDIUM') {
+        mismatch('change.confidenceBasis.level disagrees with its v1 conditions and evidence types');
+      }
+      // The compact basis is a union across all strongest locations. Two independently LOW
+      // locations may therefore contribute two evidence types without making either one MEDIUM.
+      if (!hasHighCondition && !hasMediumCondition &&
+          (evidenceTypes.length < 2 ? level !== 'LOW' : level !== 'LOW' && level !== 'MEDIUM')) {
+        mismatch('change.confidenceBasis.level disagrees with its v1 conditions and evidence types');
+      }
+    }
   }
   if ((risk === 'CRITICAL') !== (item.criticalRisk !== null)) mismatch('criticalRisk basis disagrees with risk');
   if (item.criticalRisk !== null) {
@@ -567,12 +577,13 @@ function validateConfidenceBasis(
       'destructiveRemoval', 'requiredDistinctFiles', 'requiredHighConfidenceFiles', 'observedDistinctFiles',
       'observedHighConfidenceFiles',
     ]);
-    if (critical.destructiveRemoval !== true) mismatch('criticalRisk.destructiveRemoval must be true');
+    const destructiveRemoval = booleanValue(critical.destructiveRemoval, 'criticalRisk.destructiveRemoval');
     const requiredFiles = integer(critical.requiredDistinctFiles, 'criticalRisk.requiredDistinctFiles', 1, U32_MAX);
     const requiredHighFiles = integer(critical.requiredHighConfidenceFiles, 'criticalRisk.requiredHighConfidenceFiles', 1, U32_MAX);
     if (impactEngineVersion === 1 && (requiredFiles !== 10 || requiredHighFiles !== 5)) {
       mismatch('criticalRisk thresholds disagree with Impact engine v1');
     }
+    if (impactEngineVersion === 1 && !destructiveRemoval) mismatch('criticalRisk.destructiveRemoval must be true for Impact engine v1');
     const observedFiles = integer(critical.observedDistinctFiles, 'criticalRisk.observedDistinctFiles', 1, U32_MAX);
     const observedHighFiles = integer(critical.observedHighConfidenceFiles, 'criticalRisk.observedHighConfidenceFiles', 1, U32_MAX);
     if (observedFiles !== affectedFiles || observedHighFiles !== highConfidenceFiles ||
@@ -675,14 +686,29 @@ function validateChange(value: unknown, impactEngineVersion: number): ImpactChan
       left.line - right.line || left.column - right.column;
     if (comparison >= 0) mismatch('change.affectedSources must be sorted and deduplicated');
   }
-  if (total !== returned + omitted || returned !== sources.length || files > total || highFiles > files) {
+  const returnedFiles = new Set(sources.map((source) => source.file));
+  const returnedHighFiles = new Set(sources.filter((source) => source.confidence === 'HIGH').map((source) => source.file));
+  if (
+    total !== returned + omitted || returned !== sources.length || files > total || highFiles > files ||
+    returnedFiles.size > files || returnedHighFiles.size > highFiles || (total > 0 && files === 0)
+  ) {
     mismatch('change affected-source counts are inconsistent');
   }
   if ((total === 0) !== (confidence === null) || (total === 0) !== (risk === 'NONE')) {
     mismatch('change confidence/risk does not match its affected-source count');
   }
-  if (total > 0 && potentialRisk === 'NONE') mismatch('an affected change cannot have NONE potential risk');
-  if (total > 0) {
+  if (potentialRisk === 'NONE') mismatch('a contract change cannot have NONE potential risk');
+  if (total > 0 && confidence !== null) {
+    const confidenceRank = CONFIDENCE_VALUES.indexOf(confidence);
+    const maximumReturnedConfidence = sources.reduce(
+      (maximum, source) => Math.max(maximum, CONFIDENCE_VALUES.indexOf(source.confidence)),
+      -1,
+    );
+    if (maximumReturnedConfidence > confidenceRank || (confidence === 'HIGH') !== (highFiles > 0)) {
+      mismatch('change confidence is inconsistent with its complete affected-source counts');
+    }
+  }
+  if (total > 0 && impactEngineVersion === 1) {
     const criticalElevation = risk === 'CRITICAL' && potentialRisk === 'HIGH' && DESTRUCTIVE_REMOVALS.has(kind);
     if (risk === 'CRITICAL' && !criticalElevation) mismatch('change Critical risk is not a valid destructive-removal elevation');
     if (risk !== potentialRisk && !criticalElevation) mismatch('change risk does not match its potential risk');
@@ -875,7 +901,12 @@ export function validateImpactReport(value: unknown, expectedProjectId: string, 
     mismatch('affectedSourceLocations is inconsistent');
   }
   const returnedFiles = new Set(changes.flatMap((change) => change.affectedSources.map((source) => source.file)));
-  if (affectedFiles < returnedFiles.size || affectedFiles > affectedLocations) mismatch('affectedFiles is inconsistent');
+  const maximumChangeFiles = changes.reduce((maximum, change) => Math.max(maximum, change.affectedFileCount), 0);
+  const summedChangeFiles = changes.reduce((sum, change) => sum + change.affectedFileCount, 0);
+  if (
+    affectedFiles < returnedFiles.size || affectedFiles < maximumChangeFiles || affectedFiles > summedChangeFiles ||
+    affectedFiles > affectedLocations
+  ) mismatch('affectedFiles is inconsistent');
 
   const metadata = record(item.metadata, 'metadata', [
     'serverScan', 'languagesDetected', 'warnings', 'warningsOmitted', 'truncated', 'totalAffectedSourceLocations',
@@ -886,6 +917,12 @@ export function validateImpactReport(value: unknown, expectedProjectId: string, 
   const languages = arrayValue(metadata.languagesDetected, 'metadata.languagesDetected', SOURCE_LANGUAGES.length)
     .map((entry) => enumValue<string>(entry, 'metadata.languagesDetected[]', LANGUAGE_SET));
   canonicalUnique(languages, SOURCE_LANGUAGES, 'metadata.languagesDetected');
+  const serverFilesScanned = (metadata.serverScan as Record<string, unknown>).filesScanned as number;
+  if (affectedFiles > serverFilesScanned || languages.length > serverFilesScanned ||
+      changes.some((change) => change.affectedFileCount > serverFilesScanned ||
+        change.highConfidenceFileCount > serverFilesScanned)) {
+    mismatch('affected-file or language counts exceed the authoritative server scan');
+  }
   const warnings = arrayValue(metadata.warnings, 'metadata.warnings', 200).map(validateWarning);
   for (let index = 1; index < warnings.length; index += 1) {
     const left = warnings[index - 1];
@@ -939,7 +976,7 @@ function exactSkipCounts(left: Partial<Record<SkipCode, number>>, right: Record<
 export function validateImpactReportForRequest(report: ImpactReport, request: ImpactRequest): ImpactReport {
   const logicalRoot = request.source.logicalRoot;
   if (logicalRoot !== '.') validatePortablePath(logicalRoot, 'request.source.logicalRoot');
-  const submitted = new Set<string>();
+  const submitted = new Map<string, SourceLanguage>();
   const detected = new Set<SourceLanguage>();
   let submittedBytes = 0;
   for (const file of request.source.files) {
@@ -951,7 +988,7 @@ export function validateImpactReportForRequest(report: ImpactReport, request: Im
     if (typeof file.content !== 'string') mismatch('the submitted inline manifest contains non-text content');
     const language = sourceLanguage(portable);
     if (!language) mismatch('the submitted inline manifest contains an unsupported source file');
-    submitted.add(portable);
+    submitted.set(portable, language);
     detected.add(language);
     submittedBytes += Buffer.byteLength(file.content, 'utf8');
   }
@@ -975,28 +1012,28 @@ export function validateImpactReportForRequest(report: ImpactReport, request: Im
   }
 
   const server = report.metadata.serverScan;
+  const filesScanned = server.filesScanned as number;
+  const bytesScanned = server.bytesScanned as number;
   if (server.inputType !== 'INLINE_MANIFEST' || server.authoritative !== true ||
-      server.manifestEntriesSubmitted !== submitted.size || server.filesAccepted !== submitted.size ||
-      server.filesScanned !== submitted.size || server.filesSkipped !== 0 || server.bytesScanned !== submittedBytes) {
+      server.manifestEntriesSubmitted !== submitted.size || bytesScanned > submittedBytes) {
     mismatch('metadata.serverScan does not reconcile with the submitted inline manifest');
   }
-  const serverSkipCounts = server.skipCounts;
-  if (!serverSkipCounts || typeof serverSkipCounts !== 'object' || Array.isArray(serverSkipCounts) ||
-      Object.values(serverSkipCounts).some((value) => value !== 0)) {
-    mismatch('metadata.serverScan reported skipped entries for the admitted inline manifest');
+  if (report.metadata.languagesDetected.length > filesScanned ||
+      report.metadata.languagesDetected.some((language) => !detected.has(language))) {
+    mismatch('metadata.languagesDetected contains a language absent from the submitted inline manifest');
   }
-  const expectedLanguages = SOURCE_LANGUAGES.filter((language) => detected.has(language));
-  if (report.metadata.languagesDetected.length !== expectedLanguages.length ||
-      report.metadata.languagesDetected.some((language, index) => language !== expectedLanguages[index])) {
-    mismatch('metadata.languagesDetected does not match the submitted inline manifest');
+  if (report.affectedFiles > filesScanned || report.affectedFiles > submitted.size) {
+    mismatch('affectedFiles exceeds the authoritative server scan');
   }
-  if (report.affectedFiles > submitted.size) mismatch('affectedFiles exceeds the submitted inline manifest');
   for (const change of report.changes) {
-    if (change.affectedFileCount > submitted.size || change.highConfidenceFileCount > submitted.size) {
-      mismatch('change affected-file counts exceed the submitted inline manifest');
+    if (change.affectedFileCount > filesScanned || change.highConfidenceFileCount > filesScanned) {
+      mismatch('change affected-file counts exceed the authoritative server scan');
     }
     for (const source of change.affectedSources) {
       if (!submitted.has(source.file)) mismatch('an affected source path was not submitted by this Action invocation');
+      if (submitted.get(source.file) !== source.language) {
+        mismatch('an affected source language disagrees with the submitted file extension');
+      }
     }
   }
   for (const warning of report.metadata.warnings) {

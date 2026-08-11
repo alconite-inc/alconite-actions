@@ -296,6 +296,45 @@ test('detects directory and gitignore identity races as fatal', async () => {
   );
 });
 
+test('fails closed before reading outside source when a workspace parent is swapped', {
+  skip: process.platform !== 'linux',
+}, async () => {
+  const base = await temporaryWorkspace();
+  const parent = path.join(base, 'repository-parent');
+  const displacedParent = path.join(base, 'repository-parent-original');
+  const workspace = path.join(parent, 'workspace');
+  const outsideParent = path.join(base, 'outside-parent');
+  const outsideWorkspace = path.join(outsideParent, 'workspace');
+  await fs.mkdir(workspace, { recursive: true });
+  await fs.mkdir(outsideWorkspace, { recursive: true });
+  await fs.writeFile(path.join(workspace, 'customer.ts'), 'interface Customer {}\n');
+  await fs.writeFile(path.join(outsideWorkspace, 'secret.ts'), 'const secret = "must-not-be-read";\n');
+  let swapped = false;
+  let fileOpened = false;
+  await assert.rejects(
+    collectSourceManifest({
+      workspace,
+      sourceRoot: '.',
+      includeGeneratedDirectories: false,
+      additionalIgnorePatterns: [],
+      deadline: deadline(),
+      hooks: {
+        afterRootComponentOpened: async (requestedRoot, openedComponent) => {
+          if (!swapped && requestedRoot === workspace && openedComponent === parent) {
+            swapped = true;
+            await fs.rename(parent, displacedParent);
+            await fs.symlink(outsideParent, parent, 'dir');
+          }
+        },
+        beforeFileOpen: async () => { fileOpened = true; },
+      },
+    }),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'source_race_detected',
+  );
+  assert.equal(swapped, true);
+  assert.equal(fileOpened, false);
+});
+
 test('checks the shared monotonic deadline during collection', async () => {
   const workspace = await temporaryWorkspace();
   const filename = path.join(workspace, 'customer.ts');

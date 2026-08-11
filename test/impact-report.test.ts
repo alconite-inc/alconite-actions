@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 async function fixture(): Promise<ImpactReport> {
-  const raw = JSON.parse(await fs.readFile(path.resolve('test/fixtures/impact-report-v1.json'), 'utf8')) as unknown;
+  const raw = JSON.parse(await fs.readFile(path.resolve('test/fixtures/impact-report-v1-single-file.json'), 'utf8')) as unknown;
   return validateImpactReport(raw, PROJECT_ID, CHECK_ID);
 }
 
@@ -49,15 +49,17 @@ test('evaluates every detected and potential risk threshold independently', () =
   assert.throws(() => parseRiskThreshold('warning', 'fail-on-risk'), /never, low, medium, high, critical/u);
 });
 
-test('HTML-escapes bounded source/evidence values in the job summary and omits host paths', async () => {
+test('renders bounded source/evidence values as inert Markdown and omits host paths', async () => {
   const report = await fixture();
   const source = report.changes[0]?.affectedSources[0];
   assert.ok(source);
-  source.file = 'src/<customer>|mapper.ts';
-  source.evidence[0]!.value = '<Customer>|';
+  source.file = 'src/<customer>|![leak](https://attacker.invalid/pixel).ts';
+  source.evidence[0]!.value = '<Customer>|`code` [link](https://attacker.invalid)';
   const summary = impactSummary(report);
-  assert.ok(summary.includes('&lt;customer&gt;\\|mapper.ts'));
-  assert.ok(summary.includes('&lt;Customer&gt;\\|'));
+  assert.ok(summary.includes('&lt;customer&gt;\\|\\!\\[leak\\]\\(https\\:\\/\\/attacker\\.invalid\\/pixel\\)\\.ts'));
+  assert.ok(summary.includes('&lt;Customer&gt;\\|\\`code\\` \\[link\\]\\(https\\:\\/\\/attacker\\.invalid\\)'));
+  assert.ok(!summary.includes('![leak]('));
+  assert.ok(!summary.includes('[link]('));
   assert.ok(!summary.includes(process.cwd()));
   assert.ok(!summary.includes('interface Customer'));
 });
@@ -86,7 +88,7 @@ test('writes one exclusive private report outside the workspace or fails closed 
   assert.notEqual(second, reportPath);
 });
 
-test('removes only its verified empty invocation directory when report creation fails', async () => {
+test('scrubs only its open report descriptor and leaves path cleanup to the runner on failure', async () => {
   const { workspace, runner } = await roots();
   const report = await fixture();
   if (process.platform === 'win32') return;
@@ -96,11 +98,18 @@ test('removes only its verified empty invocation directory when report creation 
     }),
     (error: unknown) => error instanceof ImpactActionError && error.code === 'report_write_failed',
   );
-  assert.deepEqual(await fs.readdir(runner), []);
+  const entries = await fs.readdir(runner);
+  assert.equal(entries.length, 1);
+  const invocation = path.join(runner, entries[0]!);
+  const files = await fs.readdir(invocation);
+  assert.deepEqual(files, ['impact-report.json']);
+  assert.equal((await fs.stat(invocation)).mode & 0o777, 0o700);
+  assert.equal((await fs.stat(path.join(invocation, 'impact-report.json'))).mode & 0o777, 0o600);
+  assert.equal((await fs.readFile(path.join(invocation, 'impact-report.json'))).byteLength, 0);
   assert.deepEqual(await fs.readdir(workspace), []);
 });
 
-test('Linux report-root binding tolerates invocation metadata changes and preserves scoped cleanup', {
+test('Linux report-root binding tolerates invocation metadata changes and preserves descriptor-only scrubbing', {
   skip: process.platform !== 'linux',
 }, async () => {
   const { workspace, runner } = await roots();
@@ -119,7 +128,10 @@ test('Linux report-root binding tolerates invocation metadata changes and preser
     }),
     (error: unknown) => error instanceof ImpactActionError && error.code === 'report_write_failed',
   );
-  assert.deepEqual(await fs.readdir(runner), []);
+  const failedEntries = await fs.readdir(runner);
+  assert.equal(failedEntries.length, 1);
+  const failedReport = path.join(runner, failedEntries[0]!, 'impact-report.json');
+  assert.equal((await fs.readFile(failedReport)).byteLength, 0);
 });
 
 test('fails closed without report bytes when the whole private child directory is swapped', {
@@ -144,7 +156,8 @@ test('fails closed without report bytes when the whole private child directory i
   assert.ok(replacement);
   assert.ok(displaced);
   assert.deepEqual(await fs.readdir(replacement), []);
-  assert.deepEqual(await fs.readdir(displaced), []);
+  assert.deepEqual(await fs.readdir(displaced), ['impact-report.json']);
+  assert.equal((await fs.readFile(path.join(displaced, 'impact-report.json'))).byteLength, 0);
 });
 
 test('fails closed when the exclusive destination name or path identity is raced', async () => {
@@ -159,17 +172,56 @@ test('fails closed when the exclusive destination name or path identity is raced
     }),
     (error: unknown) => error instanceof ImpactActionError && error.code === 'report_write_failed',
   );
+  const firstInvocation = path.join(runner, (await fs.readdir(runner))[0]!);
+  assert.equal(await fs.readFile(path.join(firstInvocation, 'impact-report.json'), 'utf8'), 'attacker-controlled');
 
   const secondRoots = await roots();
+  let racedFilename = '';
   await assert.rejects(
     writePrivateReport(report, secondRoots.runner, secondRoots.workspace, new ActionDeadline(30_000), {
       afterFileCreated: async (filename) => {
+        racedFilename = filename;
         await fs.rename(filename, `${filename}.original`);
         await fs.writeFile(filename, 'replacement');
       },
     }),
     (error: unknown) => error instanceof ImpactActionError && error.code === 'report_write_failed',
   );
+  assert.ok(racedFilename);
+  assert.equal((await fs.readFile(`${racedFilename}.original`)).byteLength, 0);
+  assert.equal(await fs.readFile(racedFilename, 'utf8'), 'replacement');
+});
+
+test('fails closed when a RUNNER_TEMP parent is swapped after descriptor binding', {
+  skip: process.platform !== 'linux',
+}, async () => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'impact-report-parent-race-'));
+  temporaryDirectories.push(base);
+  const workspace = path.join(base, 'workspace');
+  const parent = path.join(base, 'runner-parent');
+  const displacedParent = path.join(base, 'runner-parent-original');
+  const runner = path.join(parent, 'runner-temp');
+  const outsideParent = path.join(base, 'outside-parent');
+  const outsideRunner = path.join(outsideParent, 'runner-temp');
+  await fs.mkdir(workspace, { mode: 0o700 });
+  await fs.mkdir(runner, { recursive: true, mode: 0o700 });
+  await fs.mkdir(outsideRunner, { recursive: true, mode: 0o700 });
+  let swapped = false;
+  await assert.rejects(
+    writePrivateReport(await fixture(), runner, workspace, new ActionDeadline(30_000), {
+      afterRootComponentOpened: async (requestedRoot, openedComponent) => {
+        if (!swapped && requestedRoot === runner && openedComponent === parent) {
+          swapped = true;
+          await fs.rename(parent, displacedParent);
+          await fs.symlink(outsideParent, parent, 'dir');
+        }
+      },
+    }),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'unsupported_secure_report_filesystem',
+  );
+  assert.equal(swapped, true);
+  assert.deepEqual(await fs.readdir(outsideRunner), []);
+  assert.deepEqual(await fs.readdir(path.join(displacedParent, 'runner-temp')), []);
 });
 
 test('refuses a report root inside the workspace', async () => {

@@ -12,6 +12,7 @@ import {
   sameReportDirectoryObject,
   stableIdentity,
   verifyAbsoluteDirectory,
+  type RootVerificationHooks,
   type StableIdentity,
   type VerifiedDirectory,
 } from './secure-filesystem';
@@ -19,7 +20,7 @@ import { markdownTable } from '../github';
 
 export type RiskThreshold = 'never' | 'low' | 'medium' | 'high' | 'critical';
 
-export interface ReportWriteHooks {
+export interface ReportWriteHooks extends RootVerificationHooks {
   afterDirectoryCreated?: (directory: string) => Promise<void>;
   afterFileCreated?: (filename: string) => Promise<void>;
 }
@@ -41,43 +42,16 @@ function fileIdentity(stats: BigIntStats): StableIdentity {
   return stableIdentity(stats, 'report');
 }
 
-async function safeFailureCleanup(
-  root: VerifiedDirectory,
-  rootHandle: FileHandle | undefined,
-  directory: VerifiedDirectory | undefined,
-  directoryHandle: FileHandle | undefined,
-  directoryName: string | undefined,
-  anchoredFilename: string | undefined,
-  identity: StableIdentity | undefined,
-): Promise<void> {
-  if (directoryHandle && anchoredFilename && identity) {
-    try {
-      const stats = await fs.lstat(anchoredFilename, { bigint: true });
-      // A failed/partial write legitimately changes ctime; the anchored name may be removed only
-      // when it still names the exact Action-created regular inode with its original link count.
-      if (stats.isFile() && !stats.isSymbolicLink() && stats.nlink === 1n &&
-          sameFilesystemObject(identity, fileIdentity(stats))) {
-        await fs.unlink(anchoredFilename);
-      }
-    } catch {
-      // An identity mismatch must never broaden cleanup to another name or path.
-    }
-  }
-  if (rootHandle && directory && directoryHandle && directoryName) {
-    try {
-      await assertReportDirectoryHandle(rootHandle, root.identity, 'runner temporary root');
-      await assertDirectoryIdentity(root, 'report');
-      await assertReportDirectoryHandle(directoryHandle, directory.identity, 'private report directory');
-      const anchoredDirectory = descriptorChild(rootHandle, directoryName);
-      const pathStats = await fs.lstat(anchoredDirectory, { bigint: true });
-      if (!pathStats.isDirectory() || pathStats.isSymbolicLink() ||
-          !sameReportDirectoryObject(directory.identity, fileIdentity(pathStats))) return;
-      if ((await fs.readdir(descriptorPath(directoryHandle))).length !== 0) return;
-      await assertDirectoryIdentity(directory, 'report');
-      await fs.rmdir(anchoredDirectory);
-    } catch {
-      // The runner will remove RUNNER_TEMP; never recursively clean an unresolved directory.
-    }
+async function scrubFailedReport(handle: FileHandle | undefined): Promise<void> {
+  if (!handle) return;
+  try {
+    // Node does not expose identity-bound unlinkat/rmdirat. Scrub only through the still-open
+    // descriptor and leave the private invocation directory for runner cleanup; a raced pathname
+    // must never cause this Action to delete an attacker's replacement object.
+    await handle.truncate(0);
+    await handle.sync();
+  } catch {
+    // Failure is already terminal and the descriptor will be closed. Never fall back to path cleanup.
   }
 }
 
@@ -156,8 +130,8 @@ export async function writePrivateReport(
 ): Promise<string> {
   deadline.throwIfExpired();
   reportDirectoryFlags();
-  const workspace = await verifyAbsoluteDirectory(workspacePath, 'source', deadline);
-  const root = await verifyAbsoluteDirectory(runnerTemp, 'report', deadline);
+  const workspace = await verifyAbsoluteDirectory(workspacePath, 'source', deadline, hooks);
+  const root = await verifyAbsoluteDirectory(runnerTemp, 'report', deadline, hooks);
   if (isContained(workspace.realPath, root.realPath)) {
     throw new ImpactActionError('unsupported_secure_report_filesystem', 'RUNNER_TEMP must resolve outside GITHUB_WORKSPACE.');
   }
@@ -165,7 +139,6 @@ export async function writePrivateReport(
   const bytes = Buffer.from(`${JSON.stringify(report)}\n`, 'utf8');
   deadline.throwIfExpired();
   let directory: VerifiedDirectory | undefined;
-  let directoryName: string | undefined;
   let filename: string | undefined;
   let anchoredFilename: string | undefined;
   let createdIdentity: StableIdentity | undefined;
@@ -181,7 +154,7 @@ export async function writePrivateReport(
         { cause: error },
       );
     });
-    directoryName = path.basename(createdDescriptorPath);
+    const directoryName = path.basename(createdDescriptorPath);
     const createdPath = path.join(root.path, directoryName);
     await fs.chmod(createdDescriptorPath, 0o700);
     const descriptorStats = await fs.lstat(createdDescriptorPath, { bigint: true });
@@ -232,8 +205,6 @@ export async function writePrivateReport(
       throw new ImpactActionError('report_write_failed', 'The private Impact report changed while it was written.');
     }
     createdIdentity = afterWriteIdentity;
-    await handle.close();
-    handle = undefined;
     const anchoredStats = await fs.lstat(anchoredFilename, { bigint: true });
     const pathStats = await fs.lstat(filename, { bigint: true });
     const finalPath = await fs.realpath(filename);
@@ -246,10 +217,13 @@ export async function writePrivateReport(
       throw new ImpactActionError('report_write_failed', 'The private Impact report failed final identity verification.');
     }
     await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);
+    await handle.close();
+    handle = undefined;
     return filename;
   } catch (error) {
+    await scrubFailedReport(handle);
     await handle?.close().catch(() => undefined);
-    await safeFailureCleanup(root, rootHandle, directory, directoryHandle, directoryName, anchoredFilename, createdIdentity);
+    handle = undefined;
     if (error instanceof ImpactActionError) throw error;
     throw new ImpactActionError('report_write_failed', 'The private Impact report could not be created securely.', { cause: error });
   } finally {
@@ -261,6 +235,15 @@ export async function writePrivateReport(
 function serverCounter(report: ImpactReport, name: string): number {
   const value = report.metadata.serverScan[name];
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+const MARKDOWN_ACTIVE_PUNCTUATION = new Set([
+  '\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '.', '!', '"', '$', '%', "'", ',', '/', ':',
+  ';', '=', '?', '@', '^', '~',
+]);
+
+function markdownLiteral(value: string): string {
+  return [...value].map((character) => MARKDOWN_ACTIVE_PUNCTUATION.has(character) ? `\\${character}` : character).join('');
 }
 
 export function impactSummary(report: ImpactReport): string {
@@ -314,10 +297,10 @@ export function impactSummary(report: ImpactReport): string {
         ['Change', 'Source', 'Confidence', 'Basis', 'Evidence'],
         locations.slice(0, 25).map(({ change, source }) => [
           change.kind,
-          `${source.file}:${source.line}:${source.column}`,
+          markdownLiteral(`${source.file}:${source.line}:${source.column}`),
           source.confidence,
           change.confidenceBasis.conditions.join(', '),
-          source.evidence.map((evidence) => `${evidence.type}=${evidence.value}`).join(', '),
+          source.evidence.map((evidence) => `${evidence.type}=${markdownLiteral(evidence.value)}`).join(', '),
         ]),
       ),
       '',

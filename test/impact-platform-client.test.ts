@@ -19,7 +19,7 @@ const CHECK_ID = 'cgchk_22222222222222222222222222222222';
 const TOKEN = 'alc_cg_test-secret';
 
 async function fixture(): Promise<unknown> {
-  return JSON.parse(await fs.readFile(path.resolve('test/fixtures/impact-report-v1.json'), 'utf8')) as unknown;
+  return JSON.parse(await fs.readFile(path.resolve('test/fixtures/impact-report-v1-single-file.json'), 'utf8')) as unknown;
 }
 
 function request(): ImpactRequest {
@@ -110,6 +110,12 @@ test('binds the response to the exact submitted inline manifest and logical root
       source.file = 'src/not-submitted.ts';
     },
     (report) => {
+      const change = (report.changes as Array<Record<string, unknown>>)[0];
+      const source = (change?.affectedSources as Array<Record<string, unknown>>)[0];
+      assert.ok(source);
+      source.language = 'JAVASCRIPT';
+    },
+    (report) => {
       const metadata = report.metadata as Record<string, unknown>;
       metadata.warnings = [{ code: 'FILE_READ_FAILED', message: 'A source file could not be read.', path: 'src/not-submitted.ts' }];
     },
@@ -133,6 +139,30 @@ test('binds the response to the exact submitted inline manifest and logical root
   }
 });
 
+test('accepts authoritative server skips while preserving manifest and affected-source binding', async () => {
+  const input = request();
+  input.source.files.push({ path: 'src/skipped.java', content: 'class Skipped {}' });
+  input.source.clientCollection.entriesVisited = 2;
+  input.source.clientCollection.filesDiscovered = 2;
+  input.source.clientCollection.filesSubmitted = 2;
+  const report = await responseFixture(input);
+  const metadata = report.metadata as Record<string, unknown>;
+  const server = metadata.serverScan as Record<string, unknown>;
+  server.filesAccepted = 1;
+  server.filesScanned = 1;
+  server.filesSkipped = 1;
+  server.bytesScanned = Buffer.byteLength(input.source.files[0]!.content, 'utf8');
+  server.skipCounts = { ADDITIONAL_IGNORE: 1 };
+  metadata.languagesDetected = ['TYPESCRIPT'];
+
+  const result = await client(async () => new Response(JSON.stringify(report), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })).analyze(input);
+  assert.equal(result.metadata.serverScan.filesSkipped, 1);
+  assert.equal(result.affectedFiles, 1);
+});
+
 test('maps a stalled response-body read to the overall Action deadline', async () => {
   const stalled = new ReadableStream<Uint8Array>({
     start() {
@@ -147,6 +177,75 @@ test('maps a stalled response-body read to the overall Action deadline', async (
     ).analyze(request()),
     (error: unknown) => error instanceof ImpactActionError && error.code === 'action_deadline_exceeded',
   );
+});
+
+test('never awaits an adversarial response cancellation promise', async () => {
+  const neverCancellingBody = (): ReadableStream<Uint8Array> => new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode('{}')); },
+    cancel: () => new Promise<void>(() => undefined),
+  });
+  const finishWithin = async (operation: Promise<unknown>): Promise<unknown> => Promise.race([
+    operation.then(() => 'resolved', (error: unknown) => error),
+    new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 250)),
+  ]);
+
+  const redirect = await finishWithin(client(async () => new Response(neverCancellingBody(), {
+    status: 302,
+    headers: { location: 'https://evil.example' },
+  })).analyze(request()));
+  assert.notEqual(redirect, 'hung');
+  assert.ok(redirect instanceof ImpactActionError);
+
+  const wrongType = await finishWithin(client(async () => new Response(neverCancellingBody(), {
+    status: 200,
+    headers: { 'content-type': 'text/plain' },
+  })).analyze(request()));
+  assert.notEqual(wrongType, 'hung');
+  assert.ok(wrongType instanceof ImpactActionError);
+
+  const oversized = await finishWithin(client(async () => new Response(neverCancellingBody(), {
+    status: 200,
+    headers: { 'content-type': 'application/json', 'content-length': String(MAX_REPORT_BYTES + 1) },
+  })).analyze(request()));
+  assert.notEqual(oversized, 'hung');
+  assert.ok(oversized instanceof ImpactActionError);
+
+  let now = 0;
+  let attempts = 0;
+  const retryDeadline = new ActionDeadline(30_000, {
+    now: () => now,
+    sleep: async (milliseconds) => { now += milliseconds; },
+  });
+  const gateway = await finishWithin(client(async () => {
+    attempts += 1;
+    if (attempts === 1) return new Response(neverCancellingBody(), { status: 502 });
+    return new Response(JSON.stringify(await responseFixture()), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }, 2, retryDeadline).analyze(request()));
+  assert.equal(gateway, 'resolved');
+  assert.equal(attempts, 2);
+});
+
+test('parses a valid report delivered as many tiny chunks within one fixed response buffer', async () => {
+  const payload = new TextEncoder().encode(JSON.stringify(await responseFixture()));
+  let offset = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset >= payload.byteLength) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(payload.subarray(offset, offset + 1));
+      offset += 1;
+    },
+  });
+  const result = await client(async () => new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })).analyze(request());
+  assert.equal(result.schemaVersion, 'alconite.impact.report.v1');
 });
 
 test('retries only explicit busy/storage errors and gateway responses without an Impact envelope', async () => {

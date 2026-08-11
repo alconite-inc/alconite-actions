@@ -3,48 +3,49 @@
   "analysisFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "contract": {
     "type": "CONTRACT_GUARD_CHECK",
-    "projectId": "cgprj_11111111111111111111111111111111",
-    "checkId": "cgchk_22222222222222222222222222222222",
-    "baselineVersionId": "cgver_33333333333333333333333333333333",
-    "candidateVersionId": "cgver_44444444444444444444444444444444",
-    "baselineContentHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "candidateContentHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "projectId": "cgprj_00000000000000000000000000000000",
+    "checkId": "cgchk_11111111111111111111111111111111",
+    "baselineVersionId": "cgver_22222222222222222222222222222222",
+    "candidateVersionId": "cgver_33333333333333333333333333333333",
+    "baselineContentHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "candidateContentHash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "baselineOpenapiVersion": "3.0.3",
     "candidateOpenapiVersion": "3.1.0"
   },
   "engines": {
-    "analyzerVersion": "1.0.0",
+    "analyzerVersion": "1.4.0",
     "analyzerRuleSetVersion": 1,
     "analyzerCompatibilityVersion": 1,
     "legacyComparisonEngineVersion": 1,
     "contractDeltaEngineVersion": 1,
     "impactAnalysisEngineVersion": 1
   },
-  "overallRisk": "HIGH",
+  "overallRisk": "CRITICAL",
   "overallPotentialRisk": "HIGH",
   "breakingChanges": 1,
-  "affectedFiles": 1,
-  "affectedSourceLocations": 1,
+  "affectedFiles": 10,
+  "affectedSourceLocations": 10,
   "changes": [
     {
-      "id": "cgdelta_dddddddddddddddddddddddddddddddd",
-      "deltaFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      "kind": "PROPERTY_REMOVED",
+      "id": "cgdelta_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "deltaFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "kind": "ENDPOINT_REMOVED",
       "classification": "breaking",
-      "category": "schema",
-      "ruleId": "BREAK-004",
+      "category": "operation",
+      "ruleId": "operation.removed",
       "ruleVersion": 1,
-      "summary": "Response property was removed",
-      "explanation": "The candidate no longer declares the existing property.",
-      "baselineValue": "string",
+      "summary": "Endpoint GET /customers/{id} was removed.",
+      "explanation": "Consumers calling this endpoint can no longer complete the request.",
+      "baselineValue": "GET /customers/{id}",
       "candidateValue": null,
       "subject": {
-        "operation": null,
-        "schema": {
-          "name": "Customer",
-          "property": "firstName",
-          "uses": ["RESPONSE"]
+        "operation": {
+          "path": "/customers/{id}",
+          "method": "GET",
+          "baselineOperationId": "getCustomer",
+          "candidateOperationId": null
         },
+        "schema": null,
         "parameter": null,
         "responseStatus": null,
         "mediaType": null,
@@ -54,35 +55,52 @@
         "metadataPointer": null
       },
       "potentialRisk": "HIGH",
-      "risk": "HIGH",
+      "risk": "CRITICAL",
       "confidence": "HIGH",
       "confidenceBasis": {
         "level": "HIGH",
-        "conditions": ["MATCHING_TYPE_MEMBER"],
-        "evidenceTypes": ["SCHEMA_NAME", "PROPERTY_REFERENCE"],
-        "criticalRisk": null
+        "conditions": [
+          "METHOD_PATH_CALL"
+        ],
+        "evidenceTypes": [
+          "ENDPOINT_PATH",
+          "CLIENT_METHOD"
+        ],
+        "criticalRisk": {
+          "destructiveRemoval": true,
+          "requiredDistinctFiles": 10,
+          "requiredHighConfidenceFiles": 5,
+          "observedDistinctFiles": 10,
+          "observedHighConfidenceFiles": 5
+        }
       },
-      "affectedLocationCount": 1,
+      "affectedLocationCount": 10,
       "returnedAffectedLocationCount": 1,
-      "omittedAffectedLocationCount": 0,
-      "affectedFileCount": 1,
-      "highConfidenceFileCount": 1,
+      "omittedAffectedLocationCount": 9,
+      "affectedFileCount": 10,
+      "highConfidenceFileCount": 5,
       "affectedSources": [
         {
-          "file": "src/customer.ts",
-          "line": 2,
-          "column": 3,
+          "file": "src/customer/customer-client.ts",
+          "line": 48,
+          "column": 10,
           "language": "TYPESCRIPT",
           "confidence": "HIGH",
           "evidence": [
-            { "type": "SCHEMA_NAME", "value": "Customer" },
-            { "type": "PROPERTY_REFERENCE", "value": "firstName" }
+            {
+              "type": "ENDPOINT_PATH",
+              "value": "/customers/{id}"
+            },
+            {
+              "type": "CLIENT_METHOD",
+              "value": "getCustomer"
+            }
           ]
         }
       ],
       "recommendation": {
-        "code": "retain_response_property_during_migration",
-        "message": "Retain the existing property as deprecated while consumers migrate to the replacement property."
+        "code": "deprecate_endpoint_before_removal",
+        "message": "Deprecate the endpoint, migrate known consumers, then remove it after the compatibility window."
       }
     }
   ],
@@ -90,37 +108,46 @@
     "serverScan": {
       "inputType": "INLINE_MANIFEST",
       "authoritative": true,
-      "manifestEntriesSubmitted": 2,
+      "manifestEntriesSubmitted": 10,
       "filesystemEntriesVisited": null,
       "directoriesVisited": null,
       "gitignoreFilesRead": 0,
       "gitignoreBytesRead": 0,
       "gitignorePatternsParsed": 0,
-      "filesAccepted": 2,
-      "filesScanned": 2,
+      "filesAccepted": 10,
+      "filesScanned": 10,
       "filesSkipped": 0,
-      "bytesScanned": 100,
-      "indexedSymbolVariants": 4,
-      "indexedSymbolBytes": 40,
-      "lexerTokens": 20,
+      "bytesScanned": 1720,
+      "indexedSymbolVariants": 3,
+      "indexedSymbolBytes": 34,
+      "lexerTokens": 24,
       "skipCounts": {}
     },
     "clientCollection": {
       "schemaVersion": "alconite.impact.client-collection.v1",
       "authoritative": false,
-      "entriesVisited": 3,
-      "directoriesVisited": 1,
-      "filesDiscovered": 2,
-      "filesSubmitted": 2,
-      "filesSkipped": 0,
-      "skipCounts": {},
-      "collectionDurationMs": 1
+      "entriesVisited": 15,
+      "directoriesVisited": 2,
+      "filesDiscovered": 11,
+      "filesSubmitted": 10,
+      "filesSkipped": 1,
+      "skipCounts": {
+        "UNSUPPORTED_FILE": 1
+      },
+      "collectionDurationMs": 7
     },
-    "languagesDetected": ["TYPESCRIPT"],
-    "warnings": [],
+    "languagesDetected": [
+      "TYPESCRIPT"
+    ],
+    "warnings": [
+      {
+        "code": "REPORT_TRUNCATED",
+        "message": "Affected source locations were omitted to satisfy the response byte limit."
+      }
+    ],
     "warningsOmitted": 0,
-    "truncated": false,
-    "totalAffectedSourceLocations": 1,
+    "truncated": true,
+    "totalAffectedSourceLocations": 10,
     "returnedAffectedSourceLocations": 1,
     "changesWithoutReturnedLocations": 0,
     "analysisDurationMs": 12

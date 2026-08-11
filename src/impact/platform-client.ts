@@ -94,7 +94,7 @@ async function readWithDeadline(
 async function readBoundedBytes(response: Response, maximumBytes: number, deadline: ActionDeadline): Promise<Uint8Array> {
   const declaredRaw = response.headers.get('content-length');
   if (declaredRaw && /^\d+$/u.test(declaredRaw) && Number(declaredRaw) > maximumBytes) {
-    await response.body?.cancel().catch(() => undefined);
+    void response.body?.cancel().catch(() => undefined);
     throw new ImpactActionError('platform_contract_mismatch', 'Alconite returned an oversized Impact response.', { status: response.status });
   }
   if (!response.body) {
@@ -102,7 +102,7 @@ async function readBoundedBytes(response: Response, maximumBytes: number, deadli
   }
   const reader = response.body.getReader();
   const deadlineSignal = deadline.signal();
-  const chunks: Uint8Array[] = [];
+  const bytes = new Uint8Array(maximumBytes);
   let total = 0;
   while (true) {
     let result: ReadableStreamReadResult<Uint8Array>;
@@ -126,20 +126,14 @@ async function readBoundedBytes(response: Response, maximumBytes: number, deadli
     const { done, value } = result;
     if (done) break;
     deadline.throwIfExpired();
-    total += value.byteLength;
-    if (total > maximumBytes) {
-      await reader.cancel().catch(() => undefined);
+    if (value.byteLength > maximumBytes - total) {
+      void reader.cancel().catch(() => undefined);
       throw new ImpactActionError('platform_contract_mismatch', 'Alconite returned an oversized Impact response.', { status: response.status });
     }
-    chunks.push(value);
+    bytes.set(value, total);
+    total += value.byteLength;
   }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  return bytes.subarray(0, total);
 }
 
 async function readBoundedJson(response: Response, maximumBytes: number, deadline: ActionDeadline): Promise<unknown> {
@@ -223,7 +217,7 @@ export class ImpactPlatformClient {
       }
 
       if (response.status >= 300 && response.status < 400) {
-        await response.body?.cancel().catch(() => undefined);
+        void response.body?.cancel().catch(() => undefined);
         throw new ImpactActionError('platform_request_failed', 'Alconite Impact redirects are refused to protect the project token.', {
           status: response.status,
         });
@@ -232,7 +226,7 @@ export class ImpactPlatformClient {
       if (response.status === 200) {
         const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
         if (contentType !== 'application/json') {
-          await response.body?.cancel().catch(() => undefined);
+          void response.body?.cancel().catch(() => undefined);
           throw new ImpactActionError('platform_contract_mismatch', 'Alconite returned an unsupported Impact response content type.', {
             status: response.status,
           });
@@ -248,7 +242,7 @@ export class ImpactPlatformClient {
       }
 
       if (response.status === 502 && attempt < this.options.attempts) {
-        await response.body?.cancel().catch(() => undefined);
+        void response.body?.cancel().catch(() => undefined);
         await this.options.deadline.wait(retryAfterMilliseconds(response.headers.get('retry-after')) ?? backoff(attempt));
         continue;
       }

@@ -1054,8 +1054,19 @@ function validateConfidenceBasis(value, confidence, risk, affectedFiles, highCon
   }
   if (confidence !== null) {
     if (evidenceTypes.length === 0) mismatch("non-empty confidence requires evidence types");
-    const computedLevel = conditions.some((condition) => HIGH_CONFIDENCE_CONDITION_SET.has(condition)) ? "HIGH" : conditions.some((condition) => MEDIUM_CONFIDENCE_CONDITION_SET.has(condition)) || evidenceTypes.length >= 2 ? "MEDIUM" : "LOW";
-    if (level !== computedLevel) mismatch("change.confidenceBasis.level disagrees with its v1 conditions and evidence types");
+    if (impactEngineVersion === 1) {
+      const hasHighCondition = conditions.some((condition) => HIGH_CONFIDENCE_CONDITION_SET.has(condition));
+      const hasMediumCondition = conditions.some((condition) => MEDIUM_CONFIDENCE_CONDITION_SET.has(condition));
+      if (hasHighCondition && level !== "HIGH") {
+        mismatch("change.confidenceBasis.level disagrees with its v1 conditions and evidence types");
+      }
+      if (!hasHighCondition && hasMediumCondition && level !== "MEDIUM") {
+        mismatch("change.confidenceBasis.level disagrees with its v1 conditions and evidence types");
+      }
+      if (!hasHighCondition && !hasMediumCondition && (evidenceTypes.length < 2 ? level !== "LOW" : level !== "LOW" && level !== "MEDIUM")) {
+        mismatch("change.confidenceBasis.level disagrees with its v1 conditions and evidence types");
+      }
+    }
   }
   if (risk === "CRITICAL" !== (item.criticalRisk !== null)) mismatch("criticalRisk basis disagrees with risk");
   if (item.criticalRisk !== null) {
@@ -1066,12 +1077,13 @@ function validateConfidenceBasis(value, confidence, risk, affectedFiles, highCon
       "observedDistinctFiles",
       "observedHighConfidenceFiles"
     ]);
-    if (critical.destructiveRemoval !== true) mismatch("criticalRisk.destructiveRemoval must be true");
+    const destructiveRemoval = booleanValue(critical.destructiveRemoval, "criticalRisk.destructiveRemoval");
     const requiredFiles = integer(critical.requiredDistinctFiles, "criticalRisk.requiredDistinctFiles", 1, U32_MAX);
     const requiredHighFiles = integer(critical.requiredHighConfidenceFiles, "criticalRisk.requiredHighConfidenceFiles", 1, U32_MAX);
     if (impactEngineVersion === 1 && (requiredFiles !== 10 || requiredHighFiles !== 5)) {
       mismatch("criticalRisk thresholds disagree with Impact engine v1");
     }
+    if (impactEngineVersion === 1 && !destructiveRemoval) mismatch("criticalRisk.destructiveRemoval must be true for Impact engine v1");
     const observedFiles = integer(critical.observedDistinctFiles, "criticalRisk.observedDistinctFiles", 1, U32_MAX);
     const observedHighFiles = integer(critical.observedHighConfidenceFiles, "criticalRisk.observedHighConfidenceFiles", 1, U32_MAX);
     if (observedFiles !== affectedFiles || observedHighFiles !== highConfidenceFiles || observedFiles < requiredFiles || observedHighFiles < requiredHighFiles) {
@@ -1198,14 +1210,26 @@ function validateChange(value, impactEngineVersion) {
     const comparison = compareUtf8(left.file, right.file) || SOURCE_LANGUAGES.indexOf(left.language) - SOURCE_LANGUAGES.indexOf(right.language) || left.line - right.line || left.column - right.column;
     if (comparison >= 0) mismatch("change.affectedSources must be sorted and deduplicated");
   }
-  if (total !== returned + omitted || returned !== sources.length || files > total || highFiles > files) {
+  const returnedFiles = new Set(sources.map((source) => source.file));
+  const returnedHighFiles = new Set(sources.filter((source) => source.confidence === "HIGH").map((source) => source.file));
+  if (total !== returned + omitted || returned !== sources.length || files > total || highFiles > files || returnedFiles.size > files || returnedHighFiles.size > highFiles || total > 0 && files === 0) {
     mismatch("change affected-source counts are inconsistent");
   }
   if (total === 0 !== (confidence === null) || total === 0 !== (risk === "NONE")) {
     mismatch("change confidence/risk does not match its affected-source count");
   }
-  if (total > 0 && potentialRisk === "NONE") mismatch("an affected change cannot have NONE potential risk");
-  if (total > 0) {
+  if (potentialRisk === "NONE") mismatch("a contract change cannot have NONE potential risk");
+  if (total > 0 && confidence !== null) {
+    const confidenceRank = CONFIDENCE_VALUES.indexOf(confidence);
+    const maximumReturnedConfidence = sources.reduce(
+      (maximum, source) => Math.max(maximum, CONFIDENCE_VALUES.indexOf(source.confidence)),
+      -1
+    );
+    if (maximumReturnedConfidence > confidenceRank || confidence === "HIGH" !== highFiles > 0) {
+      mismatch("change confidence is inconsistent with its complete affected-source counts");
+    }
+  }
+  if (total > 0 && impactEngineVersion === 1) {
     const criticalElevation = risk === "CRITICAL" && potentialRisk === "HIGH" && DESTRUCTIVE_REMOVALS.has(kind);
     if (risk === "CRITICAL" && !criticalElevation) mismatch("change Critical risk is not a valid destructive-removal elevation");
     if (risk !== potentialRisk && !criticalElevation) mismatch("change risk does not match its potential risk");
@@ -1409,7 +1433,9 @@ function validateImpactReport(value, expectedProjectId, expectedCheckId) {
     mismatch("affectedSourceLocations is inconsistent");
   }
   const returnedFiles = new Set(changes.flatMap((change) => change.affectedSources.map((source) => source.file)));
-  if (affectedFiles < returnedFiles.size || affectedFiles > affectedLocations) mismatch("affectedFiles is inconsistent");
+  const maximumChangeFiles = changes.reduce((maximum, change) => Math.max(maximum, change.affectedFileCount), 0);
+  const summedChangeFiles = changes.reduce((sum, change) => sum + change.affectedFileCount, 0);
+  if (affectedFiles < returnedFiles.size || affectedFiles < maximumChangeFiles || affectedFiles > summedChangeFiles || affectedFiles > affectedLocations) mismatch("affectedFiles is inconsistent");
   const metadata = record(item.metadata, "metadata", [
     "serverScan",
     "languagesDetected",
@@ -1425,6 +1451,10 @@ function validateImpactReport(value, expectedProjectId, expectedCheckId) {
   if ("clientCollection" in metadata) validateClientCollection(metadata.clientCollection, "metadata.clientCollection");
   const languages = arrayValue(metadata.languagesDetected, "metadata.languagesDetected", SOURCE_LANGUAGES.length).map((entry) => enumValue(entry, "metadata.languagesDetected[]", LANGUAGE_SET));
   canonicalUnique(languages, SOURCE_LANGUAGES, "metadata.languagesDetected");
+  const serverFilesScanned = metadata.serverScan.filesScanned;
+  if (affectedFiles > serverFilesScanned || languages.length > serverFilesScanned || changes.some((change) => change.affectedFileCount > serverFilesScanned || change.highConfidenceFileCount > serverFilesScanned)) {
+    mismatch("affected-file or language counts exceed the authoritative server scan");
+  }
   const warnings = arrayValue(metadata.warnings, "metadata.warnings", 200).map(validateWarning);
   for (let index = 1; index < warnings.length; index += 1) {
     const left = warnings[index - 1];
@@ -1470,7 +1500,7 @@ function exactSkipCounts(left, right) {
 function validateImpactReportForRequest(report, request) {
   const logicalRoot = request.source.logicalRoot;
   if (logicalRoot !== ".") validatePortablePath(logicalRoot, "request.source.logicalRoot");
-  const submitted = /* @__PURE__ */ new Set();
+  const submitted = /* @__PURE__ */ new Map();
   const detected = /* @__PURE__ */ new Set();
   let submittedBytes = 0;
   for (const file of request.source.files) {
@@ -1482,7 +1512,7 @@ function validateImpactReportForRequest(report, request) {
     if (typeof file.content !== "string") mismatch("the submitted inline manifest contains non-text content");
     const language = sourceLanguage(portable2);
     if (!language) mismatch("the submitted inline manifest contains an unsupported source file");
-    submitted.add(portable2);
+    submitted.set(portable2, language);
     detected.add(language);
     submittedBytes += Buffer.byteLength(file.content, "utf8");
   }
@@ -1507,24 +1537,26 @@ function validateImpactReportForRequest(report, request) {
     mismatch("metadata.clientCollection does not echo the submitted skip accounting");
   }
   const server = report.metadata.serverScan;
-  if (server.inputType !== "INLINE_MANIFEST" || server.authoritative !== true || server.manifestEntriesSubmitted !== submitted.size || server.filesAccepted !== submitted.size || server.filesScanned !== submitted.size || server.filesSkipped !== 0 || server.bytesScanned !== submittedBytes) {
+  const filesScanned = server.filesScanned;
+  const bytesScanned = server.bytesScanned;
+  if (server.inputType !== "INLINE_MANIFEST" || server.authoritative !== true || server.manifestEntriesSubmitted !== submitted.size || bytesScanned > submittedBytes) {
     mismatch("metadata.serverScan does not reconcile with the submitted inline manifest");
   }
-  const serverSkipCounts = server.skipCounts;
-  if (!serverSkipCounts || typeof serverSkipCounts !== "object" || Array.isArray(serverSkipCounts) || Object.values(serverSkipCounts).some((value) => value !== 0)) {
-    mismatch("metadata.serverScan reported skipped entries for the admitted inline manifest");
+  if (report.metadata.languagesDetected.length > filesScanned || report.metadata.languagesDetected.some((language) => !detected.has(language))) {
+    mismatch("metadata.languagesDetected contains a language absent from the submitted inline manifest");
   }
-  const expectedLanguages = SOURCE_LANGUAGES.filter((language) => detected.has(language));
-  if (report.metadata.languagesDetected.length !== expectedLanguages.length || report.metadata.languagesDetected.some((language, index) => language !== expectedLanguages[index])) {
-    mismatch("metadata.languagesDetected does not match the submitted inline manifest");
+  if (report.affectedFiles > filesScanned || report.affectedFiles > submitted.size) {
+    mismatch("affectedFiles exceeds the authoritative server scan");
   }
-  if (report.affectedFiles > submitted.size) mismatch("affectedFiles exceeds the submitted inline manifest");
   for (const change of report.changes) {
-    if (change.affectedFileCount > submitted.size || change.highConfidenceFileCount > submitted.size) {
-      mismatch("change affected-file counts exceed the submitted inline manifest");
+    if (change.affectedFileCount > filesScanned || change.highConfidenceFileCount > filesScanned) {
+      mismatch("change affected-file counts exceed the authoritative server scan");
     }
     for (const source of change.affectedSources) {
       if (!submitted.has(source.file)) mismatch("an affected source path was not submitted by this Action invocation");
+      if (submitted.get(source.file) !== source.language) {
+        mismatch("an affected source language disagrees with the submitted file extension");
+      }
     }
   }
   for (const warning of report.metadata.warnings) {
@@ -1597,7 +1629,7 @@ async function readWithDeadline(reader, signal) {
 async function readBoundedBytes(response, maximumBytes, deadline) {
   const declaredRaw = response.headers.get("content-length");
   if (declaredRaw && /^\d+$/u.test(declaredRaw) && Number(declaredRaw) > maximumBytes) {
-    await response.body?.cancel().catch(() => void 0);
+    void response.body?.cancel().catch(() => void 0);
     throw new ImpactActionError("platform_contract_mismatch", "Alconite returned an oversized Impact response.", { status: response.status });
   }
   if (!response.body) {
@@ -1605,7 +1637,7 @@ async function readBoundedBytes(response, maximumBytes, deadline) {
   }
   const reader = response.body.getReader();
   const deadlineSignal = deadline.signal();
-  const chunks = [];
+  const bytes = new Uint8Array(maximumBytes);
   let total = 0;
   while (true) {
     let result;
@@ -1627,20 +1659,14 @@ async function readBoundedBytes(response, maximumBytes, deadline) {
     const { done, value } = result;
     if (done) break;
     deadline.throwIfExpired();
-    total += value.byteLength;
-    if (total > maximumBytes) {
-      await reader.cancel().catch(() => void 0);
+    if (value.byteLength > maximumBytes - total) {
+      void reader.cancel().catch(() => void 0);
       throw new ImpactActionError("platform_contract_mismatch", "Alconite returned an oversized Impact response.", { status: response.status });
     }
-    chunks.push(value);
+    bytes.set(value, total);
+    total += value.byteLength;
   }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  return bytes.subarray(0, total);
 }
 async function readBoundedJson(response, maximumBytes, deadline) {
   const bytes = await readBoundedBytes(response, maximumBytes, deadline);
@@ -1718,7 +1744,7 @@ var ImpactPlatformClient = class {
         continue;
       }
       if (response.status >= 300 && response.status < 400) {
-        await response.body?.cancel().catch(() => void 0);
+        void response.body?.cancel().catch(() => void 0);
         throw new ImpactActionError("platform_request_failed", "Alconite Impact redirects are refused to protect the project token.", {
           status: response.status
         });
@@ -1726,7 +1752,7 @@ var ImpactPlatformClient = class {
       if (response.status === 200) {
         const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
         if (contentType !== "application/json") {
-          await response.body?.cancel().catch(() => void 0);
+          void response.body?.cancel().catch(() => void 0);
           throw new ImpactActionError("platform_contract_mismatch", "Alconite returned an unsupported Impact response content type.", {
             status: response.status
           });
@@ -1741,7 +1767,7 @@ var ImpactPlatformClient = class {
         return report;
       }
       if (response.status === 502 && attempt < this.options.attempts) {
-        await response.body?.cancel().catch(() => void 0);
+        void response.body?.cancel().catch(() => void 0);
         await this.options.deadline.wait(retryAfterMilliseconds(response.headers.get("retry-after")) ?? backoff(attempt));
         continue;
       }
@@ -1820,13 +1846,47 @@ function isContained(parent, child, allowEqual = true) {
 async function lstatBigInt(filename) {
   return import_node_fs2.promises.lstat(filename, { bigint: true });
 }
-async function verifyAbsoluteDirectory(requested, purpose, deadline) {
-  deadline.throwIfExpired();
-  if (!import_node_path.default.isAbsolute(requested)) {
-    const code = purpose === "report" ? "unsupported_secure_report_filesystem" : "unsupported_secure_source_filesystem";
-    throw new ImpactActionError(code, `The ${purpose} root must be an absolute existing directory.`);
+function rootError(purpose, message, options = {}) {
+  return new ImpactActionError(
+    purpose === "report" ? "unsupported_secure_report_filesystem" : "unsupported_secure_source_filesystem",
+    message,
+    options
+  );
+}
+function descriptorPath(handle) {
+  return `/proc/self/fd/${handle.fd}`;
+}
+function descriptorChild(handle, child) {
+  return `${descriptorPath(handle)}/${child}`;
+}
+function rootDirectoryFlags(purpose) {
+  if (process.platform !== "linux" || typeof import_node_fs2.constants.O_NOFOLLOW !== "number" || typeof import_node_fs2.constants.O_DIRECTORY !== "number") {
+    throw rootError(
+      purpose,
+      `Secure ${purpose} root verification requires Linux descriptor-relative no-follow filesystem support.`
+    );
   }
-  const resolved = import_node_path.default.resolve(requested);
+  return import_node_fs2.constants.O_RDONLY | import_node_fs2.constants.O_NOFOLLOW | import_node_fs2.constants.O_DIRECTORY;
+}
+async function openRootComponent(pathname, purpose) {
+  let handle;
+  try {
+    handle = await import_node_fs2.promises.open(pathname, rootDirectoryFlags(purpose));
+    const stats = await handle.stat({ bigint: true });
+    if (!stats.isDirectory()) {
+      await handle.close().catch(() => void 0);
+      handle = void 0;
+      throw rootError(purpose, `The ${purpose} root must contain only directories.`);
+    }
+    stableIdentity(stats, purpose);
+    return handle;
+  } catch (error2) {
+    await handle?.close().catch(() => void 0);
+    if (error2 instanceof ImpactActionError) throw error2;
+    throw rootError(purpose, `The ${purpose} root is not an accessible existing directory.`, { cause: error2 });
+  }
+}
+async function verifyPortableSourceDirectory(resolved, deadline, hooks) {
   const parsed = import_node_path.default.parse(resolved);
   const components = import_node_path.default.relative(parsed.root, resolved).split(import_node_path.default.sep).filter(Boolean);
   let current = parsed.root;
@@ -1834,29 +1894,82 @@ async function verifyAbsoluteDirectory(requested, purpose, deadline) {
     deadline.throwIfExpired();
     current = import_node_path.default.join(current, component);
     const stats = await lstatBigInt(current).catch((error2) => {
-      const code = purpose === "report" ? "unsupported_secure_report_filesystem" : "unsupported_secure_source_filesystem";
-      throw new ImpactActionError(code, `The ${purpose} root is not an accessible existing directory.`, { cause: error2 });
+      throw rootError("source", "The source root is not an accessible existing directory.", { cause: error2 });
     });
-    if (stats.isSymbolicLink()) {
-      const code = purpose === "report" ? "unsupported_secure_report_filesystem" : "unsupported_secure_source_filesystem";
-      throw new ImpactActionError(code, `The ${purpose} root contains a symbolic link or junction component.`);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw rootError("source", "The source root contains a symbolic link, junction, or non-directory component.");
     }
+    await hooks.afterRootComponentOpened?.(resolved, current);
   }
   const before = await lstatBigInt(resolved);
-  if (!before.isDirectory() || before.isSymbolicLink()) {
-    const code = purpose === "report" ? "unsupported_secure_report_filesystem" : "unsupported_secure_source_filesystem";
-    throw new ImpactActionError(code, `The ${purpose} root must be a non-link directory.`);
-  }
-  const identity = stableIdentity(before, purpose);
+  const identity = stableIdentity(before);
   const realPath = await import_node_fs2.promises.realpath(resolved);
   const after = await lstatBigInt(resolved);
-  if (!sameIdentity(identity, stableIdentity(after, purpose)) || !after.isDirectory() || !samePath(realPath, await import_node_fs2.promises.realpath(resolved))) {
-    throw new ImpactActionError(
-      purpose === "report" ? "unsupported_secure_report_filesystem" : "source_race_detected",
-      `The ${purpose} root changed while its identity was being established.`
-    );
+  if (!before.isDirectory() || before.isSymbolicLink() || !after.isDirectory() || after.isSymbolicLink() || !sameIdentity(identity, stableIdentity(after)) || !samePath(realPath, await import_node_fs2.promises.realpath(resolved))) {
+    throw new ImpactActionError("source_race_detected", "The source root changed while its identity was being established.");
   }
   return { path: resolved, realPath, identity };
+}
+async function verifyAbsoluteDirectory(requested, purpose, deadline, hooks = {}) {
+  deadline.throwIfExpired();
+  if (!import_node_path.default.isAbsolute(requested)) {
+    throw rootError(purpose, `The ${purpose} root must be an absolute existing directory.`);
+  }
+  const resolved = import_node_path.default.resolve(requested);
+  if (process.platform !== "linux" || typeof import_node_fs2.constants.O_NOFOLLOW !== "number" || typeof import_node_fs2.constants.O_DIRECTORY !== "number") {
+    if (purpose === "report") rootDirectoryFlags(purpose);
+    return verifyPortableSourceDirectory(resolved, deadline, hooks);
+  }
+  rootDirectoryFlags(purpose);
+  const parsed = import_node_path.default.parse(resolved);
+  const components = import_node_path.default.relative(parsed.root, resolved).split(import_node_path.default.sep).filter(Boolean);
+  let handle = await openRootComponent(parsed.root, purpose);
+  let openedPath = parsed.root;
+  try {
+    for (const component of components) {
+      deadline.throwIfExpired();
+      const child = await openRootComponent(descriptorChild(handle, component), purpose);
+      const childBefore = stableIdentity(await child.stat({ bigint: true }), purpose);
+      openedPath = import_node_path.default.join(openedPath, component);
+      try {
+        await hooks.afterRootComponentOpened?.(resolved, openedPath);
+        const childAfter = stableIdentity(await child.stat({ bigint: true }), purpose);
+        if (!sameIdentity(childBefore, childAfter)) {
+          throw new ImpactActionError(
+            purpose === "report" ? "unsupported_secure_report_filesystem" : "source_race_detected",
+            `The ${purpose} root changed while a component was being established.`
+          );
+        }
+      } catch (error2) {
+        await child.close().catch(() => void 0);
+        throw error2;
+      }
+      const parent = handle;
+      handle = child;
+      await parent.close().catch(() => void 0);
+    }
+    deadline.throwIfExpired();
+    const opened = await handle.stat({ bigint: true });
+    const identity = stableIdentity(opened, purpose);
+    const realPath = await import_node_fs2.promises.realpath(descriptorPath(handle)).catch((error2) => {
+      throw rootError(purpose, `The ${purpose} root cannot be addressed safely through /proc/self/fd.`, { cause: error2 });
+    });
+    const ambient = await lstatBigInt(resolved).catch((error2) => {
+      throw rootError(purpose, `The ${purpose} root changed while its identity was being established.`, { cause: error2 });
+    });
+    const ambientRealPath = await import_node_fs2.promises.realpath(resolved).catch((error2) => {
+      throw rootError(purpose, `The ${purpose} root changed while its identity was being established.`, { cause: error2 });
+    });
+    if (!ambient.isDirectory() || ambient.isSymbolicLink() || !sameIdentity(identity, stableIdentity(ambient, purpose)) || !samePath(realPath, ambientRealPath)) {
+      throw new ImpactActionError(
+        purpose === "report" ? "unsupported_secure_report_filesystem" : "source_race_detected",
+        `The ${purpose} root changed while its identity was being established.`
+      );
+    }
+    return { path: resolved, realPath, identity };
+  } finally {
+    await handle.close().catch(() => void 0);
+  }
 }
 async function assertDirectoryIdentity(directory, purpose) {
   const stats = await lstatBigInt(directory.path);
@@ -1995,29 +2108,12 @@ function shouldFailRisk(risk, threshold) {
 function fileIdentity(stats) {
   return stableIdentity(stats, "report");
 }
-async function safeFailureCleanup(root, rootHandle, directory, directoryHandle, directoryName, anchoredFilename, identity) {
-  if (directoryHandle && anchoredFilename && identity) {
-    try {
-      const stats = await import_node_fs3.promises.lstat(anchoredFilename, { bigint: true });
-      if (stats.isFile() && !stats.isSymbolicLink() && stats.nlink === 1n && sameFilesystemObject(identity, fileIdentity(stats))) {
-        await import_node_fs3.promises.unlink(anchoredFilename);
-      }
-    } catch {
-    }
-  }
-  if (rootHandle && directory && directoryHandle && directoryName) {
-    try {
-      await assertReportDirectoryHandle(rootHandle, root.identity, "runner temporary root");
-      await assertDirectoryIdentity(root, "report");
-      await assertReportDirectoryHandle(directoryHandle, directory.identity, "private report directory");
-      const anchoredDirectory = descriptorChild(rootHandle, directoryName);
-      const pathStats = await import_node_fs3.promises.lstat(anchoredDirectory, { bigint: true });
-      if (!pathStats.isDirectory() || pathStats.isSymbolicLink() || !sameReportDirectoryObject(directory.identity, fileIdentity(pathStats))) return;
-      if ((await import_node_fs3.promises.readdir(descriptorPath(directoryHandle))).length !== 0) return;
-      await assertDirectoryIdentity(directory, "report");
-      await import_node_fs3.promises.rmdir(anchoredDirectory);
-    } catch {
-    }
+async function scrubFailedReport(handle) {
+  if (!handle) return;
+  try {
+    await handle.truncate(0);
+    await handle.sync();
+  } catch {
   }
 }
 function reportDirectoryFlags() {
@@ -2029,11 +2125,11 @@ function reportDirectoryFlags() {
   }
   return import_node_fs3.constants.O_RDONLY | import_node_fs3.constants.O_NOFOLLOW | import_node_fs3.constants.O_DIRECTORY;
 }
-function descriptorPath(handle) {
+function descriptorPath2(handle) {
   return `/proc/self/fd/${handle.fd}`;
 }
-function descriptorChild(handle, child) {
-  return `${descriptorPath(handle)}/${child}`;
+function descriptorChild2(handle, child) {
+  return `${descriptorPath2(handle)}/${child}`;
 }
 async function assertReportDirectoryHandle(handle, identity, label) {
   const stats = await handle.stat({ bigint: true });
@@ -2054,7 +2150,7 @@ async function openReportDirectory(directory, label) {
   }
   try {
     await assertReportDirectoryHandle(handle, directory.identity, label);
-    const throughDescriptor = await import_node_fs3.promises.stat(descriptorPath(handle), { bigint: true });
+    const throughDescriptor = await import_node_fs3.promises.stat(descriptorPath2(handle), { bigint: true });
     if (!throughDescriptor.isDirectory() || !sameReportDirectoryObject(directory.identity, fileIdentity(throughDescriptor))) {
       throw new ImpactActionError(
         "unsupported_secure_report_filesystem",
@@ -2076,8 +2172,8 @@ async function assertBoundReportDirectory(root, rootHandle, directory, directory
 async function writePrivateReport(report, runnerTemp, workspacePath, deadline, hooks = {}) {
   deadline.throwIfExpired();
   reportDirectoryFlags();
-  const workspace = await verifyAbsoluteDirectory(workspacePath, "source", deadline);
-  const root = await verifyAbsoluteDirectory(runnerTemp, "report", deadline);
+  const workspace = await verifyAbsoluteDirectory(workspacePath, "source", deadline, hooks);
+  const root = await verifyAbsoluteDirectory(runnerTemp, "report", deadline, hooks);
   if (isContained(workspace.realPath, root.realPath)) {
     throw new ImpactActionError("unsupported_secure_report_filesystem", "RUNNER_TEMP must resolve outside GITHUB_WORKSPACE.");
   }
@@ -2086,7 +2182,6 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
 `, "utf8");
   deadline.throwIfExpired();
   let directory;
-  let directoryName;
   let filename;
   let anchoredFilename;
   let createdIdentity;
@@ -2095,14 +2190,14 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
   let directoryHandle;
   try {
     rootHandle = await openReportDirectory(root, "runner temporary root");
-    const createdDescriptorPath = await import_node_fs3.promises.mkdtemp(descriptorChild(rootHandle, "alconite-impact-")).catch((error2) => {
+    const createdDescriptorPath = await import_node_fs3.promises.mkdtemp(descriptorChild2(rootHandle, "alconite-impact-")).catch((error2) => {
       throw new ImpactActionError(
         "unsupported_secure_report_filesystem",
         "The runner does not support descriptor-anchored private directory creation through /proc/self/fd.",
         { cause: error2 }
       );
     });
-    directoryName = import_node_path2.default.basename(createdDescriptorPath);
+    const directoryName = import_node_path2.default.basename(createdDescriptorPath);
     const createdPath = import_node_path2.default.join(root.path, directoryName);
     await import_node_fs3.promises.chmod(createdDescriptorPath, 448);
     const descriptorStats = await import_node_fs3.promises.lstat(createdDescriptorPath, { bigint: true });
@@ -2124,7 +2219,7 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
     await hooks.afterDirectoryCreated?.(directory.path);
     await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);
     filename = import_node_path2.default.join(directory.path, "impact-report.json");
-    anchoredFilename = descriptorChild(directoryHandle, "impact-report.json");
+    anchoredFilename = descriptorChild2(directoryHandle, "impact-report.json");
     handle = await import_node_fs3.promises.open(
       anchoredFilename,
       import_node_fs3.constants.O_CREAT | import_node_fs3.constants.O_EXCL | import_node_fs3.constants.O_NOFOLLOW | import_node_fs3.constants.O_WRONLY,
@@ -2151,8 +2246,6 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
       throw new ImpactActionError("report_write_failed", "The private Impact report changed while it was written.");
     }
     createdIdentity = afterWriteIdentity;
-    await handle.close();
-    handle = void 0;
     const anchoredStats = await import_node_fs3.promises.lstat(anchoredFilename, { bigint: true });
     const pathStats = await import_node_fs3.promises.lstat(filename, { bigint: true });
     const finalPath = await import_node_fs3.promises.realpath(filename);
@@ -2160,10 +2253,13 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
       throw new ImpactActionError("report_write_failed", "The private Impact report failed final identity verification.");
     }
     await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);
+    await handle.close();
+    handle = void 0;
     return filename;
   } catch (error2) {
+    await scrubFailedReport(handle);
     await handle?.close().catch(() => void 0);
-    await safeFailureCleanup(root, rootHandle, directory, directoryHandle, directoryName, anchoredFilename, createdIdentity);
+    handle = void 0;
     if (error2 instanceof ImpactActionError) throw error2;
     throw new ImpactActionError("report_write_failed", "The private Impact report could not be created securely.", { cause: error2 });
   } finally {
@@ -2174,6 +2270,39 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
 function serverCounter(report, name) {
   const value = report.metadata.serverScan[name];
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+var MARKDOWN_ACTIVE_PUNCTUATION = /* @__PURE__ */ new Set([
+  "\\",
+  "`",
+  "*",
+  "_",
+  "{",
+  "}",
+  "[",
+  "]",
+  "(",
+  ")",
+  "#",
+  "+",
+  "-",
+  ".",
+  "!",
+  '"',
+  "$",
+  "%",
+  "'",
+  ",",
+  "/",
+  ":",
+  ";",
+  "=",
+  "?",
+  "@",
+  "^",
+  "~"
+]);
+function markdownLiteral(value) {
+  return [...value].map((character) => MARKDOWN_ACTIVE_PUNCTUATION.has(character) ? `\\${character}` : character).join("");
 }
 function impactSummary(report) {
   const client = report.metadata.clientCollection;
@@ -2226,10 +2355,10 @@ function impactSummary(report) {
         ["Change", "Source", "Confidence", "Basis", "Evidence"],
         locations.slice(0, 25).map(({ change, source }) => [
           change.kind,
-          `${source.file}:${source.line}:${source.column}`,
+          markdownLiteral(`${source.file}:${source.line}:${source.column}`),
           source.confidence,
           change.confidenceBasis.conditions.join(", "),
-          source.evidence.map((evidence) => `${evidence.type}=${evidence.value}`).join(", ")
+          source.evidence.map((evidence) => `${evidence.type}=${markdownLiteral(evidence.value)}`).join(", ")
         ])
       ),
       ""
@@ -2462,9 +2591,9 @@ async function collectSourceManifest(options) {
   const patterns = validateAdditionalIgnorePatterns(options.additionalIgnorePatterns);
   const limits = mergedLimits(options.limits);
   const hooks = options.hooks ?? {};
-  const workspace = await verifyAbsoluteDirectory(options.workspace, "source", options.deadline);
+  const workspace = await verifyAbsoluteDirectory(options.workspace, "source", options.deadline, hooks);
   const requestedRoot = logicalRoot === "." ? workspace.path : import_node_path3.default.resolve(workspace.path, ...logicalRoot.split("/"));
-  const root = await verifyAbsoluteDirectory(requestedRoot, "source", options.deadline);
+  const root = await verifyAbsoluteDirectory(requestedRoot, "source", options.deadline, hooks);
   if (!isContained(workspace.realPath, root.realPath)) invalid("source-root must remain inside GITHUB_WORKSPACE");
   const accounting = new CollectionAccounting(limits);
   const layers = [];

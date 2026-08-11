@@ -14,6 +14,7 @@ All notable changes to this project are documented in this file.
 
 - Source and ignore files are never executed and are read through verified file handles with pre/open/post identity and containment checks; source contents, tokens, and host paths are not logged.
 - Impact reports are created exclusively through descriptor-anchored Linux paths below a verified `RUNNER_TEMP` root outside the workspace, with private modes and whole-directory swap detection. Windows Node 24 lacks the portable no-follow/reparse/mode primitives required by the source/report boundary and therefore fails before collection or source submission.
+- Workspace and report roots are now opened component-by-component from pinned parent descriptors; failed reports are scrubbed only through their retained file descriptor, and summary evidence is rendered with inert Markdown punctuation.
 - Runner manifests now enforce the platform's exact portable component grammar, and strict response validation binds every count, affected path, warning path, risk elevation, and Contract Delta identity to the submitted inline manifest.
 - Future v2 releases now verify and attest the checked-in `impact/dist` bundle; this unreleased implementation does not create a tag or release.
 

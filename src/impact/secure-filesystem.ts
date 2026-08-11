@@ -18,7 +18,11 @@ export interface VerifiedDirectory {
   identity: StableIdentity;
 }
 
-export interface SourceRaceHooks {
+export interface RootVerificationHooks {
+  afterRootComponentOpened?: (requestedRoot: string, openedComponent: string) => Promise<void>;
+}
+
+export interface SourceRaceHooks extends RootVerificationHooks {
   beforeDirectoryRead?: (directory: string) => Promise<void>;
   beforeFileOpen?: (filename: string) => Promise<void>;
   afterFileRead?: (filename: string) => Promise<void>;
@@ -80,18 +84,63 @@ async function lstatBigInt(filename: string): Promise<BigIntStats> {
   return fs.lstat(filename, { bigint: true });
 }
 
-/** Validate every existing component and reject all symlink/junction components before trusting a root. */
-export async function verifyAbsoluteDirectory(
-  requested: string,
+function rootError(
   purpose: 'source' | 'report',
-  deadline: ActionDeadline,
-): Promise<VerifiedDirectory> {
-  deadline.throwIfExpired();
-  if (!path.isAbsolute(requested)) {
-    const code = purpose === 'report' ? 'unsupported_secure_report_filesystem' : 'unsupported_secure_source_filesystem';
-    throw new ImpactActionError(code, `The ${purpose} root must be an absolute existing directory.`);
+  message: string,
+  options: { cause?: unknown } = {},
+): ImpactActionError {
+  return new ImpactActionError(
+    purpose === 'report' ? 'unsupported_secure_report_filesystem' : 'unsupported_secure_source_filesystem',
+    message,
+    options,
+  );
+}
+
+function descriptorPath(handle: FileHandle): string {
+  return `/proc/self/fd/${handle.fd}`;
+}
+
+function descriptorChild(handle: FileHandle, child: string): string {
+  return `${descriptorPath(handle)}/${child}`;
+}
+
+function rootDirectoryFlags(purpose: 'source' | 'report'): number {
+  if (process.platform !== 'linux' || typeof constants.O_NOFOLLOW !== 'number' || typeof constants.O_DIRECTORY !== 'number') {
+    throw rootError(
+      purpose,
+      `Secure ${purpose} root verification requires Linux descriptor-relative no-follow filesystem support.`,
+    );
   }
-  const resolved = path.resolve(requested);
+  return constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY;
+}
+
+async function openRootComponent(
+  pathname: string,
+  purpose: 'source' | 'report',
+): Promise<FileHandle> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await fs.open(pathname, rootDirectoryFlags(purpose));
+    const stats = await handle.stat({ bigint: true });
+    if (!stats.isDirectory()) {
+      await handle.close().catch(() => undefined);
+      handle = undefined;
+      throw rootError(purpose, `The ${purpose} root must contain only directories.`);
+    }
+    stableIdentity(stats, purpose);
+    return handle;
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    if (error instanceof ImpactActionError) throw error;
+    throw rootError(purpose, `The ${purpose} root is not an accessible existing directory.`, { cause: error });
+  }
+}
+
+async function verifyPortableSourceDirectory(
+  resolved: string,
+  deadline: ActionDeadline,
+  hooks: RootVerificationHooks,
+): Promise<VerifiedDirectory> {
   const parsed = path.parse(resolved);
   const components = path.relative(parsed.root, resolved).split(path.sep).filter(Boolean);
   let current = parsed.root;
@@ -99,29 +148,102 @@ export async function verifyAbsoluteDirectory(
     deadline.throwIfExpired();
     current = path.join(current, component);
     const stats = await lstatBigInt(current).catch((error: unknown) => {
-      const code = purpose === 'report' ? 'unsupported_secure_report_filesystem' : 'unsupported_secure_source_filesystem';
-      throw new ImpactActionError(code, `The ${purpose} root is not an accessible existing directory.`, { cause: error });
+      throw rootError('source', 'The source root is not an accessible existing directory.', { cause: error });
     });
-    if (stats.isSymbolicLink()) {
-      const code = purpose === 'report' ? 'unsupported_secure_report_filesystem' : 'unsupported_secure_source_filesystem';
-      throw new ImpactActionError(code, `The ${purpose} root contains a symbolic link or junction component.`);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw rootError('source', 'The source root contains a symbolic link, junction, or non-directory component.');
     }
+    await hooks.afterRootComponentOpened?.(resolved, current);
   }
   const before = await lstatBigInt(resolved);
-  if (!before.isDirectory() || before.isSymbolicLink()) {
-    const code = purpose === 'report' ? 'unsupported_secure_report_filesystem' : 'unsupported_secure_source_filesystem';
-    throw new ImpactActionError(code, `The ${purpose} root must be a non-link directory.`);
-  }
-  const identity = stableIdentity(before, purpose);
+  const identity = stableIdentity(before);
   const realPath = await fs.realpath(resolved);
   const after = await lstatBigInt(resolved);
-  if (!sameIdentity(identity, stableIdentity(after, purpose)) || !after.isDirectory() || !samePath(realPath, await fs.realpath(resolved))) {
-    throw new ImpactActionError(
-      purpose === 'report' ? 'unsupported_secure_report_filesystem' : 'source_race_detected',
-      `The ${purpose} root changed while its identity was being established.`,
-    );
+  if (
+    !before.isDirectory() || before.isSymbolicLink() || !after.isDirectory() || after.isSymbolicLink() ||
+    !sameIdentity(identity, stableIdentity(after)) || !samePath(realPath, await fs.realpath(resolved))
+  ) {
+    throw new ImpactActionError('source_race_detected', 'The source root changed while its identity was being established.');
   }
   return { path: resolved, realPath, identity };
+}
+
+/**
+ * Bind every root component to an opened parent descriptor before trusting the requested path.
+ * Ambient path checks remain only as a final proof that the caller's name still reaches that inode.
+ */
+export async function verifyAbsoluteDirectory(
+  requested: string,
+  purpose: 'source' | 'report',
+  deadline: ActionDeadline,
+  hooks: RootVerificationHooks = {},
+): Promise<VerifiedDirectory> {
+  deadline.throwIfExpired();
+  if (!path.isAbsolute(requested)) {
+    throw rootError(purpose, `The ${purpose} root must be an absolute existing directory.`);
+  }
+  const resolved = path.resolve(requested);
+  if (process.platform !== 'linux' || typeof constants.O_NOFOLLOW !== 'number' || typeof constants.O_DIRECTORY !== 'number') {
+    if (purpose === 'report') rootDirectoryFlags(purpose);
+    // The checked-in Action rejects non-Linux runners before inputs or source are processed. This
+    // portable branch keeps the isolated collector testable without weakening that entry boundary.
+    return verifyPortableSourceDirectory(resolved, deadline, hooks);
+  }
+  rootDirectoryFlags(purpose);
+  const parsed = path.parse(resolved);
+  const components = path.relative(parsed.root, resolved).split(path.sep).filter(Boolean);
+  let handle = await openRootComponent(parsed.root, purpose);
+  let openedPath = parsed.root;
+  try {
+    for (const component of components) {
+      deadline.throwIfExpired();
+      const child = await openRootComponent(descriptorChild(handle, component), purpose);
+      const childBefore = stableIdentity(await child.stat({ bigint: true }), purpose);
+      openedPath = path.join(openedPath, component);
+      try {
+        await hooks.afterRootComponentOpened?.(resolved, openedPath);
+        const childAfter = stableIdentity(await child.stat({ bigint: true }), purpose);
+        if (!sameIdentity(childBefore, childAfter)) {
+          throw new ImpactActionError(
+            purpose === 'report' ? 'unsupported_secure_report_filesystem' : 'source_race_detected',
+            `The ${purpose} root changed while a component was being established.`,
+          );
+        }
+      } catch (error) {
+        await child.close().catch(() => undefined);
+        throw error;
+      }
+      const parent = handle;
+      handle = child;
+      await parent.close().catch(() => undefined);
+    }
+
+    deadline.throwIfExpired();
+    const opened = await handle.stat({ bigint: true });
+    const identity = stableIdentity(opened, purpose);
+    const realPath = await fs.realpath(descriptorPath(handle)).catch((error: unknown) => {
+      throw rootError(purpose, `The ${purpose} root cannot be addressed safely through /proc/self/fd.`, { cause: error });
+    });
+    const ambient = await lstatBigInt(resolved).catch((error: unknown) => {
+      throw rootError(purpose, `The ${purpose} root changed while its identity was being established.`, { cause: error });
+    });
+    const ambientRealPath = await fs.realpath(resolved).catch((error: unknown) => {
+      throw rootError(purpose, `The ${purpose} root changed while its identity was being established.`, { cause: error });
+    });
+    if (
+      !ambient.isDirectory() || ambient.isSymbolicLink() ||
+      !sameIdentity(identity, stableIdentity(ambient, purpose)) ||
+      !samePath(realPath, ambientRealPath)
+    ) {
+      throw new ImpactActionError(
+        purpose === 'report' ? 'unsupported_secure_report_filesystem' : 'source_race_detected',
+        `The ${purpose} root changed while its identity was being established.`,
+      );
+    }
+    return { path: resolved, realPath, identity };
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 export async function assertDirectoryIdentity(directory: VerifiedDirectory, purpose: 'source' | 'report'): Promise<void> {
