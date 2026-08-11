@@ -8,6 +8,7 @@ import {
 
 const currentVersion = '2.2.0';
 const currentTag = `v${currentVersion}`;
+const mixedCasePrefix = ['AlCoNiTe-InC', 'AlCoNiTe-AcTiOnS'].join('/');
 
 test('release policy accepts only the current self-reference outside labeled history', () => {
   assert.doesNotThrow(() => validateSelfReferences(
@@ -18,6 +19,11 @@ test('release policy accepts only the current self-reference outside labeled his
   assert.doesNotThrow(() => validateSelfReferences(
     '.github/workflows/example.yml',
     `${selfReferencePrefix}/.github/workflows/runtime-verify.yml@${currentTag}`,
+    currentTag,
+  ));
+  assert.doesNotThrow(() => validateSelfReferences(
+    'README.md',
+    `${mixedCasePrefix}/impact@${currentTag}`,
     currentTag,
   ));
 
@@ -45,13 +51,38 @@ test('release policy accepts only the current self-reference outside labeled his
     ),
     /non-current self-reference/u,
   );
+  assert.throws(
+    () => validateSelfReferences(
+      'README.md',
+      `${mixedCasePrefix}/impact@main`,
+      currentTag,
+    ),
+    /non-current self-reference/u,
+  );
 
-  const historical = `- Historical compatibility: ${selfReferencePrefix}@v${['2', '0', '0'].join('.')} is frozen.`;
+  const historicalLine = (ref) => `- Historical compatibility: ${selfReferencePrefix}@${ref} is frozen.`;
+  const historical = historicalLine(`v${['2', '0', '0'].join('.')}`);
   assert.doesNotThrow(() => validateSelfReferences('CHANGELOG.md', historical, currentTag));
   assert.throws(
     () => validateSelfReferences('README.md', historical, currentTag),
     /non-current self-reference/u,
   );
+
+  const invalidHistoricalRefs = [
+    'main',
+    'a'.repeat(40),
+    'feature/old-release',
+    currentTag,
+    `v${['2', '2', '1'].join('.')}`,
+    `v${['1', '9', '9'].join('.')}`,
+  ];
+  for (const ref of invalidHistoricalRefs) {
+    assert.throws(
+      () => validateSelfReferences('CHANGELOG.md', historicalLine(ref), currentTag),
+      /non-current self-reference/u,
+      `historical compatibility must reject ${ref}`,
+    );
+  }
 });
 
 test('release policy requires one dated current heading directly after the empty pending section', () => {

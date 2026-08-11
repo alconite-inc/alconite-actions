@@ -6,17 +6,32 @@ function escapePattern(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
+function parseV2Tag(tag) {
+  const match = /^v2\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(tag);
+  return match ? [BigInt(match[1]), BigInt(match[2])] : undefined;
+}
+
+function isOlderV2Tag(ref, currentTag) {
+  const refVersion = parseV2Tag(ref);
+  const currentVersion = parseV2Tag(currentTag);
+  if (!refVersion || !currentVersion) return false;
+  return refVersion[0] < currentVersion[0]
+    || (refVersion[0] === currentVersion[0] && refVersion[1] < currentVersion[1]);
+}
+
 export function validateSelfReferences(filename, source, currentTag) {
   const reference = new RegExp(
     `${escapePattern(selfReferencePrefix)}[^\\s"'\\x60@]*@([^\\s"'\\x60]+)`,
-    'gu',
+    'giu',
   );
   for (const [index, line] of source.split(/\r?\n/u).entries()) {
     for (const match of line.matchAll(reference)) {
       const ref = match[1];
-      const historical = filename === 'CHANGELOG.md' && line.startsWith('- Historical compatibility: ');
+      const historicalLine = filename === 'CHANGELOG.md'
+        && line.startsWith('- Historical compatibility: ');
+      const allowed = historicalLine ? isOlderV2Tag(ref, currentTag) : ref === currentTag;
       assert.ok(
-        ref === currentTag || historical,
+        allowed,
         `${filename}:${index + 1} contains non-current self-reference ${match[0]}`,
       );
     }
