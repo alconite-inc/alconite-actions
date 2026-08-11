@@ -22,6 +22,23 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Validate immutable tag target and main ancestry
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main
+          tag_commit="$(git rev-parse "$RELEASE_TAG^{commit}")"
+          main_commit="$(git rev-parse "refs/remotes/origin/main^{commit}")"
+          if [[ "$GITHUB_SHA" != "$tag_commit" ]]; then
+            echo "::error::Workflow commit $GITHUB_SHA does not match tag target $tag_commit"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$tag_commit" "$main_commit"; then
+            echo "::error::Tag target $tag_commit is not reachable from origin/main at $main_commit"
+            exit 1
+          fi
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
@@ -51,7 +68,7 @@ jobs:
         with:
           subject-path: runtime-verify/dist/**
       - name: Attest Impact JavaScript build
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: impact/dist/**
       - name: Create GitHub release

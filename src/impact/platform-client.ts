@@ -1,5 +1,6 @@
 import { ActionDeadline } from './deadline';
 import { ImpactActionError } from './errors';
+import { IMPACT_USER_AGENT } from '../release';
 import {
   MAX_REPORT_BYTES,
   validateImpactReport,
@@ -199,7 +200,7 @@ export class ImpactPlatformClient {
             accept: 'application/json',
             authorization: `Bearer ${this.options.projectToken}`,
             'content-type': 'application/json',
-            'user-agent': 'alconite-impact-action/2.1.2-unreleased',
+            'user-agent': IMPACT_USER_AGENT,
           },
           body,
           redirect: 'manual',

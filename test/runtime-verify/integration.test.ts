@@ -119,7 +119,7 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
         provider: 'github-actions', repository: 'owner/repository', commitSha: 'abc', ref: 'refs/heads/main', workflow: 'Deploy',
         workflowRunId: '123', workflowRunAttempt: 1, releaseIdentifier: null
       },
-      runner: { name: 'alconite-runtime-verify-action', version: '2.1.1', operatingSystem: 'Linux', architecture: 'X64' },
+      runner: { name: 'alconite-runtime-verify-action', version: '2.2.0', operatingSystem: 'Linux', architecture: 'X64' },
       summary: {
         ...body.execution,
         informationalFindings: submitted.filter((item: any) => item.classification === 'informational').length

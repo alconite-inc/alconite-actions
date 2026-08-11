@@ -1,5 +1,6 @@
 import type { RuntimeErrorCode } from './errors';
 import { RuntimeVerifyError } from './errors';
+import { RUNTIME_VERIFY_RUNNER, RUNTIME_VERIFY_USER_AGENT } from '../release';
 import type { RuntimeVerifyInputs } from './inputs';
 import type { RunnerResult, RuntimeReportFinding, RuntimeReportSummary, RuntimeVerifyReport } from './report';
 
@@ -140,7 +141,7 @@ export class RuntimeVerifyPlatformClient {
           headers: {
             Authorization: `Bearer ${this.options.projectToken}`,
             'Content-Type': 'application/json', Accept: 'application/json',
-            'User-Agent': 'alconite-runtime-verify-action/2.1.1',
+            'User-Agent': RUNTIME_VERIFY_USER_AGENT,
             ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {})
           },
           body: JSON.stringify(body)
@@ -205,7 +206,7 @@ export function createInitiationRequest(
       ...(inputs.deploymentId ? { releaseIdentifier: inputs.deploymentId } : {})
     },
     runner: {
-      name: 'alconite-runtime-verify-action', version: '2.1.1',
+      name: RUNTIME_VERIFY_RUNNER.name, version: RUNTIME_VERIFY_RUNNER.version,
       operatingSystem: bounded(environment.RUNNER_OS ?? process.platform, 80),
       architecture: bounded(environment.RUNNER_ARCH ?? process.arch, 80)
     }

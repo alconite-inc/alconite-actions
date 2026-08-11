@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-08-11
+
 ### Added
 
 - Additive `impact/` Node 24 Action for check-linked API change impact analysis against Rust, Java, TypeScript, and JavaScript source in the checked-out workspace.
@@ -16,10 +18,19 @@ All notable changes to this project are documented in this file.
 - Impact reports are created exclusively through descriptor-anchored Linux paths below a verified `RUNNER_TEMP` root outside the workspace, with private modes and whole-directory swap detection. Windows Node 24 lacks the portable no-follow/reparse/mode primitives required by the source/report boundary and therefore fails before collection or source submission.
 - Workspace and report roots are now opened component-by-component from pinned parent descriptors; failed reports are scrubbed only through their retained file descriptor, and summary evidence is rendered with inert Markdown punctuation.
 - Runner manifests now enforce the platform's exact portable component grammar, and strict response validation binds every count, affected path, warning path, risk elevation, and Contract Delta identity to the submitted inline manifest.
-- Future v2 releases now verify and attest the checked-in `impact/dist` bundle; this unreleased implementation does not create a tag or release.
+- The v2 release workflow now verifies and attests the checked-in `impact/dist` bundle alongside the Contract Guard and Runtime Verify distributions.
 - Report-directory permissions are enforced only through the verified child descriptor, and pre-bind symlink or regular-directory swaps cannot redirect `chmod` to an attacker-selected target.
 - Report v1 validation now mirrors all 47 Contract Delta v1 subject/category/order rules and recomputes exact Impact v1 potential, detected, and Critical risk policy; future semantic engine versions remain structurally validated without inheriting v1 policy.
 - Response-body resets and live upstream aborts use the existing bounded retry/deadline policy instead of being misreported as an expired Action deadline.
+
+### Changed
+
+- Published Contract Guard, Runtime Verify, and Impact under one repository-wide v2.2.0 release identity, including synchronized runner metadata and outbound user agents.
+- Updated current component and reusable-workflow examples to v2.2.0 and aligned report uploads with the reviewed `actions/upload-artifact` v7.0.1 commit.
+
+### Documentation
+
+- Documented the released Impact workflow, exact token scopes, Linux runner boundary, bounded collection and retry behavior, private report lifecycle, and the separation between publishing this Action and enabling the platform feature.
 
 ## [2.1.2] - 2026-08-08
 

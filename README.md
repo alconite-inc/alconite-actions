@@ -1,6 +1,6 @@
 # Alconite Actions
 
-Production-oriented GitHub Actions for [Alconite Contract Guard](https://alconite.com), Alconite Runtime Verify, and repeatable Java, Node.js, Rust, and Docker CI.
+Production-oriented GitHub Actions for [Alconite Contract Guard](https://alconite.com), Alconite Impact, Alconite Runtime Verify, and repeatable Java, Node.js, Rust, and Docker CI.
 
 Version 2 makes Contract Guard the public root action. It uploads an OpenAPI candidate, receives the completed deterministic release-gate report, writes a GitHub job summary, exposes bounded outputs, and fails the step when the configured policy threshold is reached.
 
@@ -28,20 +28,20 @@ jobs:
           persist-credentials: false
       - name: Verify API compatibility
         id: contract-guard
-        uses: alconite-inc/alconite-actions@v2.0.0
+        uses: alconite-inc/alconite-actions@v2.2.0
         with:
           project-id: cgprj_1234567890abcdef
           project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
           candidate-path: openapi.yaml
       - name: Preserve the canonical JSON report
         if: ${{ always() && steps.contract-guard.outputs.report-path != '' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: contract-guard-report
           path: ${{ steps.contract-guard.outputs.report-path }}
 ```
 
-For the strongest supply-chain guarantee, replace `v2.0.0` with its full release commit SHA. Exact SemVer references are used in these examples for readability.
+For the strongest supply-chain guarantee, replace `v2.2.0` with its full release commit SHA. Exact SemVer references are used in these examples for readability.
 
 Do not expose the project token to code from untrusted forks. GitHub does not provide ordinary Actions secrets to fork pull requests; keep that protection enabled.
 
@@ -80,13 +80,24 @@ The action exposes `check-id`, `project-id`, `status`, `gate-result`, `report-ur
 
 ## Alconite Impact
 
-Alconite Impact is an additive component Action that correlates the typed changes from a completed Contract Guard check with deterministic evidence in Rust, Java, TypeScript, and JavaScript source. The draft component is selected explicitly with:
+Alconite Impact is an additive component Action that correlates the typed changes from a completed Contract Guard check with deterministic evidence in Rust, Java, TypeScript, and JavaScript source. The released component is selected explicitly with:
 
 ```yaml
-uses: alconite-inc/alconite-actions/impact@<immutable-sha>
+uses: alconite-inc/alconite-actions/impact@v2.2.0
 ```
 
-This component is currently unreleased. Use it only from a reviewed immutable commit after its prerequisite Alconite Platform API has been enabled in the intended non-production environment. No tag or production rollout is included in this repository change.
+Version 2.2.0 publishes Impact under the same repository tag as Contract Guard and Runtime Verify. For the strongest supply-chain guarantee, replace the friendly tag with the full v2.2.0 release commit SHA. Publishing this Action does not deploy or enable Alconite Impact on the platform; an environment with the server feature disabled returns the typed `impact_disabled` response.
+
+To analyze an existing completed check without running Contract Guard in the same job:
+
+```yaml
+- name: Analyze an existing Contract Guard check
+  uses: alconite-inc/alconite-actions/impact@v2.2.0
+  with:
+    project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
+    project-token: ${{ secrets.ALCONITE_IMPACT_TOKEN }}
+    check-id: cgchk_1234567890abcdef1234567890abcdef
+```
 
 ### Contract Guard and Impact workflow
 
@@ -95,7 +106,7 @@ Impact chains to the root Action's emitted `check-id`; it does not upload contra
 ```yaml
 - name: Contract Guard
   id: contract_guard
-  uses: alconite-inc/alconite-actions@<immutable-sha>
+  uses: alconite-inc/alconite-actions@v2.2.0
   with:
     project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
     project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
@@ -104,7 +115,7 @@ Impact chains to the root Action's emitted `check-id`; it does not upload contra
 - name: Alconite Impact
   id: impact
   if: ${{ always() && steps.contract_guard.outputs.check-id != '' }}
-  uses: alconite-inc/alconite-actions/impact@<same-immutable-sha>
+  uses: alconite-inc/alconite-actions/impact@v2.2.0
   with:
     project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
     project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
@@ -112,13 +123,13 @@ Impact chains to the root Action's emitted `check-id`; it does not upload contra
 
 - name: Preserve the private Impact report
   if: ${{ always() && steps.impact.outputs.report-path != '' }}
-  uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+  uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
   with:
     name: impact-report
     path: ${{ steps.impact.outputs.report-path }}
 ```
 
-The project token needs the root Contract Guard Action's existing scopes plus the explicit `impact:write` scope. `always()` allows Impact to analyze a completed check after Contract Guard emits a check ID even when the release-policy gate fails; it does not clear the failed Contract Guard step or job. Authentication, upload, or submission failures emit no check ID, so the condition skips Impact.
+An Impact-only workflow for an existing completed check needs `impact:write`. The chained workflow above needs exactly `versions:write`, `checks:write`, and `impact:write`; it does not need `checks:read`. `always()` allows Impact to analyze a completed check after Contract Guard emits a check ID even when the release-policy gate fails; it does not clear the failed Contract Guard step or job. Authentication, upload, or submission failures emit no check ID, so the condition skips Impact.
 
 ### Inputs, outputs, and gates
 
@@ -127,6 +138,8 @@ Required inputs are `project-id`, `project-token`, and `check-id`. Optional inpu
 `fail-on-risk` evaluates source-evidenced `overallRisk`. `fail-on-potential-risk` independently evaluates `overallPotentialRisk`, which preserves the severity of an unmatched contract change. Each accepts `never`, `low`, `medium`, `high`, or `critical` and fails for a result at or above the selected threshold. Both default to `never`. Outputs are set and the canonical report is written before either gate is applied.
 
 The Action exposes the linked check ID, both risk values, breaking/affected counts, authoritative scanned/skipped counts, runner collection counts, truncation state, analysis fingerprint, and `report-path`. `report-path` is output-only and names a fresh `0600` file inside a fresh `0700` directory below verified `RUNNER_TEMP`, outside the workspace. The report remains runner-local unless a later explicit workflow step copies or uploads it. If report creation fails, the Action zeroes only the still-open file descriptor and leaves the private invocation directory for runner cleanup; it never deletes a raced pathname. The job summary contains bounded HTML-escaped, Markdown-inert evidence only—never source snippets.
+
+Platform analysis is ephemeral request/response processing: the service persists neither submitted source nor an Impact report. Uploading the private runner report is an explicit workflow decision, and the artifact's access and retention follow the repository's GitHub settings.
 
 ### Source collection and privacy
 
@@ -138,7 +151,7 @@ The Action never executes source, repository scripts, Git, hooks, build tools, o
 
 Report v1 validation enforces the exact Contract Delta v1 category, typed-subject, and canonical-order contract and independently recomputes Impact v1 potential, detected, and Critical risk values. Newer positive semantic engine integers retain the strict report-v1 wire, bounds, identity, count, and structural checks without being interpreted through older v1 policy.
 
-On Linux, every `GITHUB_WORKSPACE` and `RUNNER_TEMP` root component is opened from its pinned parent descriptor with `O_NOFOLLOW | O_DIRECTORY` before the ambient name is trusted. Source reads then use `O_NOFOLLOW` plus stable descriptor identity and final containment checks. Report creation anchors the verified `RUNNER_TEMP` root, fresh child directory, and exclusive file through Linux descriptors and `/proc/self/fd`, while rechecking the ambient output path before any report bytes are written. Node 24 does not expose equivalent Windows no-follow/reparse attributes or enforceable private POSIX report modes, so the Action fails closed before workspace traversal or network submission. Use a supported Linux GitHub runner for this component.
+On Linux, every `GITHUB_WORKSPACE` and `RUNNER_TEMP` root component is opened from its pinned parent descriptor with `O_NOFOLLOW | O_DIRECTORY` before the ambient name is trusted. Source reads then use `O_NOFOLLOW` plus stable descriptor identity and final containment checks. Report creation anchors the verified `RUNNER_TEMP` root, fresh child directory, and exclusive file through Linux descriptors and `/proc/self/fd`, while rechecking the ambient output path before any report bytes are written. Node 24 does not expose equivalent Windows no-follow/reparse attributes or enforceable private POSIX report modes, so the Action fails closed before workspace traversal or network submission. Use an `ubuntu-24.04` or another supported Linux GitHub runner for this component.
 
 Only network or response-body transport failures, gateway HTTP 502, gateway 504 without a valid Impact error, the exact `429` + `impact_analysis_busy` pair, and the exact `503` + `impact_storage_unavailable` pair are retried. Redirects, mismatched status/code pairs, authentication/scope errors, disabled/timeout/internal errors, check history errors, payload limits, and deterministic contract/symbol/token/evidence/report complexity errors are never retried.
 
@@ -146,13 +159,13 @@ Impact's lexical evidence is deterministic but heuristic: it does not resolve im
 
 ## Runtime Verify
 
-Runtime Verify is an additive component Action in the 2.1 release line. The repository root remains Contract Guard; Runtime Verify is selected explicitly with:
+Runtime Verify is an additive component Action in the repository-wide v2.2.0 release. The repository root remains Contract Guard; Runtime Verify is selected explicitly with:
 
 ```yaml
-uses: alconite-inc/alconite-actions/runtime-verify@v2.1.2
+uses: alconite-inc/alconite-actions/runtime-verify@v2.2.0
 ```
 
-Runtime Verify from `v2.1.0` is deprecated because its runner and report envelopes do not match the published Alconite Platform contract. Use `v2.1.2` for the current compatibility and pending-run cleanup fixes. The Contract Guard root Action in `v2.1.0` is unaffected, and Runtime Verify `v2.1.1` remains compatible but is superseded.
+Version 2.2.0 is the current compatible release for all three product components. Historical Runtime Verify releases from the 2.1 line are superseded because the earliest runner/report envelopes predated the published Alconite Platform contract.
 
 The Alconite platform never calls the target API. Requests execute inside the customer-controlled GitHub runner. The Action reads the checked-in contract and `.alconite/runtime-verify.yaml`, resolves only explicitly named target secrets from the runner environment, calls the configured target, validates responses locally, and submits a bounded observation/finding envelope. Target origins, expanded request URLs, authorization values, cookies, response bodies, response header values, environment values, local paths, GitHub tokens, and stack traces are not submitted.
 
@@ -245,7 +258,7 @@ jobs:
 
       - name: Verify contract compatibility
         id: contract
-        uses: alconite-inc/alconite-actions@v2.1.2
+        uses: alconite-inc/alconite-actions@v2.2.0
         with:
           project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
           project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
@@ -256,7 +269,7 @@ jobs:
 
       - name: Verify staging implementation
         id: runtime
-        uses: alconite-inc/alconite-actions/runtime-verify@v2.1.2
+        uses: alconite-inc/alconite-actions/runtime-verify@v2.2.0
         env:
           STAGING_API_AUTHORIZATION: ${{ secrets.STAGING_API_AUTHORIZATION }}
         with:
@@ -270,7 +283,7 @@ jobs:
 
       - name: Preserve Runtime Verify report
         if: ${{ always() && steps.runtime.outputs.report-path != '' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runtime-verify-report
           path: ${{ steps.runtime.outputs.report-path }}
@@ -281,7 +294,7 @@ The reusable [Runtime Verify workflow](.github/workflows/runtime-verify.yml) is 
 ```yaml
 jobs:
   runtime:
-    uses: alconite-inc/alconite-actions/.github/workflows/runtime-verify.yml@v2.1.2
+    uses: alconite-inc/alconite-actions/.github/workflows/runtime-verify.yml@v2.2.0
     with:
       project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
       environment-id: ${{ vars.ALCONITE_RUNTIME_ENVIRONMENT_ID }}
@@ -309,7 +322,7 @@ on:
 
 jobs:
   ci:
-    uses: alconite-inc/alconite-actions/.github/workflows/stack-ci.yml@v2.0.0
+    uses: alconite-inc/alconite-actions/.github/workflows/stack-ci.yml@v2.2.0
     permissions:
       contents: read
     with:
@@ -328,7 +341,7 @@ All component actions target Linux GitHub-hosted runners and can be used directl
 ### Java
 
 ```yaml
-- uses: alconite-inc/alconite-actions/java-ci@v2.0.0
+- uses: alconite-inc/alconite-actions/java-ci@v2.2.0
   with:
     java-version: "25"
     build-tool: auto
@@ -341,7 +354,7 @@ Gradle and Maven wrappers are required. Private package credentials are passed a
 Publishing is deliberately separate:
 
 ```yaml
-- uses: alconite-inc/alconite-actions/java-publish@v2.0.0
+- uses: alconite-inc/alconite-actions/java-publish@v2.2.0
   with:
     packages-token: ${{ github.token }}
     release-version: 2.0.0
@@ -352,7 +365,7 @@ Run publishing only in a trusted tag or protected-environment job with `packages
 ### Node.js
 
 ```yaml
-- uses: alconite-inc/alconite-actions/node-ci@v2.0.0
+- uses: alconite-inc/alconite-actions/node-ci@v2.2.0
   with:
     node-version: "24"
     package-manager: auto
@@ -364,7 +377,7 @@ The action supports npm, pnpm, and Yarn, requires a committed lockfile, and requ
 ### Rust
 
 ```yaml
-- uses: alconite-inc/alconite-actions/rust-ci@v2.0.0
+- uses: alconite-inc/alconite-actions/rust-ci@v2.2.0
   with:
     toolchain: auto
     workspace: "true"
@@ -378,7 +391,7 @@ The Rust action honors `rust-toolchain.toml`, uses the minimal rustup profile, r
 Pull requests build without logging in:
 
 ```yaml
-- uses: alconite-inc/alconite-actions/docker-ci@v2.0.0
+- uses: alconite-inc/alconite-actions/docker-ci@v2.2.0
   with:
     push: "false"
 ```
@@ -387,7 +400,7 @@ Trusted publishing is explicit:
 
 ```yaml
 - id: image
-  uses: alconite-inc/alconite-actions/docker-ci@v2.0.0
+  uses: alconite-inc/alconite-actions/docker-ci@v2.2.0
   with:
     push: "true"
     registry-password: ${{ github.token }}
@@ -400,7 +413,7 @@ The registry password is never passed to the Dockerfile as a build secret. Publi
 ### Discord
 
 ```yaml
-- uses: alconite-inc/alconite-actions/discord-notify@v2.0.0
+- uses: alconite-inc/alconite-actions/discord-notify@v2.2.0
   if: ${{ always() }}
   with:
     webhook-url: ${{ secrets.DISCORD_WEBHOOK }}

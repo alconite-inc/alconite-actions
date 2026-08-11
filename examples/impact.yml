@@ -15,7 +15,7 @@ jobs:
           persist-credentials: false
       - name: Contract Guard
         id: contract_guard
-        uses: alconite-inc/alconite-actions@<immutable-sha>
+        uses: alconite-inc/alconite-actions@v2.2.0
         with:
           project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
           project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
@@ -23,8 +23,15 @@ jobs:
       - name: Alconite Impact
         id: impact
         if: ${{ always() && steps.contract_guard.outputs.check-id != '' }}
-        uses: alconite-inc/alconite-actions/impact@<same-immutable-sha>
+        uses: alconite-inc/alconite-actions/impact@v2.2.0
         with:
           project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
           project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
           check-id: ${{ steps.contract_guard.outputs.check-id }}
+      - name: Preserve the private Impact report
+        if: ${{ always() && steps.impact.outputs.report-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: impact-report
+          path: ${{ steps.impact.outputs.report-path }}
+          if-no-files-found: error

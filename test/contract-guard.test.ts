@@ -106,6 +106,7 @@ test('posts multipart data with bearer auth and returns the completed report', a
     assert.equal(request.url, '/api/v1/contract-guard/projects/cgprj_test/checks');
     assert.equal(request.headers.authorization, 'Bearer alc_cg_secret');
     assert.equal(request.headers['idempotency-key'], 'test-attempt');
+    assert.equal(request.headers['user-agent'], 'alconite-contract-guard-action/2.2.0');
     assert.match(request.headers['content-type'] || '', /^multipart\/form-data; boundary=/u);
     request.resume();
     response.writeHead(200, { 'content-type': 'application/json' });

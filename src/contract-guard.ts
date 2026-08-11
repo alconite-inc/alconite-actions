@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { CONTRACT_GUARD_USER_AGENT } from './release';
 
 export const MAX_CANDIDATE_BYTES = 9_437_184;
 export const MAX_REPORT_BYTES = 33_554_432;
@@ -376,7 +377,7 @@ export async function runCheck(
           accept: 'application/json',
           authorization: `Bearer ${request.projectToken}`,
           'idempotency-key': request.idempotencyKey,
-          'user-agent': 'alconite-contract-guard-action/2.1.1',
+          'user-agent': CONTRACT_GUARD_USER_AGENT,
         },
         body,
         redirect: 'manual',
