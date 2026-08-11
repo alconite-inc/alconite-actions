@@ -12,7 +12,7 @@
     "build:runtime-verify": "node scripts/build-runtime-verify.mjs",
     "build:impact": "node scripts/build-impact.mjs",
     "build:test": "tsc -p tsconfig.test.json",
-    "test": "npm run build:test && node --test build/test/*.test.js build/test/runtime-verify/*.test.js",
+    "test": "npm run build:test && node --test build/test/*.test.js build/test/runtime-verify/*.test.js test/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "validate:actions": "node scripts/validate-actions.mjs",
     "validate:dependencies": "node scripts/validate-runtime-dependencies.mjs",

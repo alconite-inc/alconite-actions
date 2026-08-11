@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { parse } from 'yaml';
+import { validateChangelog, validateSelfReferences } from './release-policy.mjs';
 
 const execFileAsync = promisify(execFile);
 const packageManifest = JSON.parse(await readFile('package.json', 'utf8'));
@@ -13,6 +14,8 @@ const uploadArtifact = 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875
 const attest = 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4';
 const uploadArtifactMarker = ['actions/upload', 'artifact@'].join('-');
 const attestMarker = ['actions', 'attest@'].join('/');
+const historicalVersionFile = 'CHANGELOG.md';
+const releaseValidator = 'scripts/validate-release.mjs';
 
 assert.match(releaseVersion, /^2\.\d+\.\d+$/u, 'package version must remain in the supported v2 release line');
 assert.equal(packageLock.version, releaseVersion, 'package-lock.json version must match package.json');
@@ -42,9 +45,7 @@ const forbiddenTokens = [
 ];
 const pendingHeading = ['Un', 'released'].join('');
 const pendingWord = new RegExp(`\\b${pendingHeading}\\b`, 'iu');
-const historicalVersionFile = 'CHANGELOG.md';
-const releaseValidator = 'scripts/validate-release.mjs';
-let emptyPendingHeadingCount = 0;
+validateChangelog(await readFile(historicalVersionFile, 'utf8'), releaseVersion);
 
 for (const filename of trackedFiles) {
   const bytes = await readFile(filename);
@@ -56,15 +57,7 @@ for (const filename of trackedFiles) {
     }
     assert.equal(pendingWord.test(source), false, `${filename} contains a pending-release marker`);
   }
-  if (filename === historicalVersionFile) {
-    emptyPendingHeadingCount += (source.match(new RegExp(`^## \\[${pendingHeading}\\]\\r?$`, 'gmu')) ?? []).length;
-    const pendingSection = new RegExp(`^## \\[${pendingHeading}\\]\\r?\\n\\r?\\n(?=## \\[)`, 'mu');
-    assert.match(source, pendingSection, 'CHANGELOG pending section must remain empty after release preparation');
-  }
-
-  for (const match of source.matchAll(/alconite-inc\/alconite-actions(?:\/[A-Za-z0-9_.-]+)*@(v\d+\.\d+\.\d+)/gu)) {
-    assert.equal(match[1], releaseTag, `${filename} contains stale self-reference ${match[0]}`);
-  }
+  validateSelfReferences(filename, source, releaseTag);
 
   for (const line of source.split(/\r?\n/u)) {
     if (line.includes(uploadArtifactMarker)) {
@@ -75,13 +68,36 @@ for (const filename of trackedFiles) {
     }
   }
 }
-assert.equal(emptyPendingHeadingCount, 1, 'CHANGELOG must contain exactly one empty pending-release heading');
-
 const releaseWorkflow = parse(await readFile('.github/workflows/release.yml', 'utf8'));
 assert.deepEqual(releaseWorkflow.on?.push?.tags, ['v2.*.*'], 'release workflow must remain limited to v2 SemVer tags');
 const steps = releaseWorkflow.jobs?.release?.steps ?? [];
-const tagStep = steps.find((step) => step.name === 'Validate immutable tag target');
-assert.ok(tagStep?.run?.includes('GITHUB_SHA'), 'release workflow must bind the checkout to the immutable tag target');
+const checkout = steps[0];
+assert.match(checkout?.uses ?? '', /^actions\/checkout@[a-f0-9]{40}$/u, 'release workflow must begin with immutable checkout');
+assert.equal(checkout?.with?.['fetch-depth'], 0, 'release checkout must fetch full history for ancestry validation');
+assert.equal(checkout?.with?.['persist-credentials'], false, 'release checkout must not persist GitHub credentials');
+const tagStep = steps.find((step) => step.name === 'Validate immutable tag target and main ancestry');
+assert.equal(steps.indexOf(tagStep), 1, 'tag and main ancestry validation must run immediately after checkout');
+assert.equal(tagStep?.shell, 'bash', 'tag and main ancestry validation must use bash');
+assert.equal(tagStep?.env?.RELEASE_TAG, '${{ github.ref_name }}', 'tag validation must use the triggering ref name');
+const expectedTagGate = [
+  'set -euo pipefail',
+  'git fetch --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main',
+  'tag_commit="$(git rev-parse "$RELEASE_TAG^{commit}")"',
+  'main_commit="$(git rev-parse "refs/remotes/origin/main^{commit}")"',
+  'if [[ "$GITHUB_SHA" != "$tag_commit" ]]; then',
+  '  echo "::error::Workflow commit $GITHUB_SHA does not match tag target $tag_commit"',
+  '  exit 1',
+  'fi',
+  'if ! git merge-base --is-ancestor "$tag_commit" "$main_commit"; then',
+  '  echo "::error::Tag target $tag_commit is not reachable from origin/main at $main_commit"',
+  '  exit 1',
+  'fi',
+].join('\n');
+assert.equal(
+  tagStep?.run?.replaceAll('\r\n', '\n').trim(),
+  expectedTagGate,
+  'release workflow must retain the exact fail-closed tag/main ancestry gate',
+);
 const attestations = new Map(
   steps
     .filter((step) => typeof step.name === 'string' && step.name.startsWith('Attest '))
