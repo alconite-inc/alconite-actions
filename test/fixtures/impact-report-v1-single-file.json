@@ -1,0 +1,128 @@
+{
+  "schemaVersion": "alconite.impact.report.v1",
+  "analysisFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "contract": {
+    "type": "CONTRACT_GUARD_CHECK",
+    "projectId": "cgprj_11111111111111111111111111111111",
+    "checkId": "cgchk_22222222222222222222222222222222",
+    "baselineVersionId": "cgver_33333333333333333333333333333333",
+    "candidateVersionId": "cgver_44444444444444444444444444444444",
+    "baselineContentHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "candidateContentHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "baselineOpenapiVersion": "3.0.3",
+    "candidateOpenapiVersion": "3.1.0"
+  },
+  "engines": {
+    "analyzerVersion": "1.0.0",
+    "analyzerRuleSetVersion": 1,
+    "analyzerCompatibilityVersion": 1,
+    "legacyComparisonEngineVersion": 1,
+    "contractDeltaEngineVersion": 1,
+    "impactAnalysisEngineVersion": 1
+  },
+  "overallRisk": "HIGH",
+  "overallPotentialRisk": "HIGH",
+  "breakingChanges": 1,
+  "affectedFiles": 1,
+  "affectedSourceLocations": 1,
+  "changes": [
+    {
+      "id": "cgdelta_dddddddddddddddddddddddddddddddd",
+      "deltaFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "kind": "PROPERTY_REMOVED",
+      "classification": "breaking",
+      "category": "schema",
+      "ruleId": "BREAK-004",
+      "ruleVersion": 1,
+      "summary": "Response property was removed",
+      "explanation": "The candidate no longer declares the existing property.",
+      "baselineValue": "string",
+      "candidateValue": null,
+      "subject": {
+        "operation": null,
+        "schema": {
+          "name": "Customer",
+          "property": "firstName",
+          "uses": ["RESPONSE"]
+        },
+        "parameter": null,
+        "responseStatus": null,
+        "mediaType": null,
+        "enumValue": null,
+        "securityScheme": null,
+        "securityScope": null,
+        "metadataPointer": null
+      },
+      "potentialRisk": "HIGH",
+      "risk": "HIGH",
+      "confidence": "HIGH",
+      "confidenceBasis": {
+        "level": "HIGH",
+        "conditions": ["MATCHING_TYPE_MEMBER"],
+        "evidenceTypes": ["SCHEMA_NAME", "PROPERTY_REFERENCE"],
+        "criticalRisk": null
+      },
+      "affectedLocationCount": 1,
+      "returnedAffectedLocationCount": 1,
+      "omittedAffectedLocationCount": 0,
+      "affectedFileCount": 1,
+      "highConfidenceFileCount": 1,
+      "affectedSources": [
+        {
+          "file": "src/customer.ts",
+          "line": 2,
+          "column": 3,
+          "language": "TYPESCRIPT",
+          "confidence": "HIGH",
+          "evidence": [
+            { "type": "SCHEMA_NAME", "value": "Customer" },
+            { "type": "PROPERTY_REFERENCE", "value": "firstName" }
+          ]
+        }
+      ],
+      "recommendation": {
+        "code": "retain_response_property_during_migration",
+        "message": "Retain the existing property as deprecated while consumers migrate to the replacement property."
+      }
+    }
+  ],
+  "metadata": {
+    "serverScan": {
+      "inputType": "INLINE_MANIFEST",
+      "authoritative": true,
+      "manifestEntriesSubmitted": 2,
+      "filesystemEntriesVisited": null,
+      "directoriesVisited": null,
+      "gitignoreFilesRead": 0,
+      "gitignoreBytesRead": 0,
+      "gitignorePatternsParsed": 0,
+      "filesAccepted": 2,
+      "filesScanned": 2,
+      "filesSkipped": 0,
+      "bytesScanned": 100,
+      "indexedSymbolVariants": 4,
+      "indexedSymbolBytes": 40,
+      "lexerTokens": 20,
+      "skipCounts": {}
+    },
+    "clientCollection": {
+      "schemaVersion": "alconite.impact.client-collection.v1",
+      "authoritative": false,
+      "entriesVisited": 3,
+      "directoriesVisited": 1,
+      "filesDiscovered": 2,
+      "filesSubmitted": 2,
+      "filesSkipped": 0,
+      "skipCounts": {},
+      "collectionDurationMs": 1
+    },
+    "languagesDetected": ["TYPESCRIPT"],
+    "warnings": [],
+    "warningsOmitted": 0,
+    "truncated": false,
+    "totalAffectedSourceLocations": 1,
+    "returnedAffectedSourceLocations": 1,
+    "changesWithoutReturnedLocations": 0,
+    "analysisDurationMs": 12
+  }
+}

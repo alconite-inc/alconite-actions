@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Additive `impact/` Node 24 Action for check-linked API change impact analysis against Rust, Java, TypeScript, and JavaScript source in the checked-out workspace.
+- Strict `alconite.impact.report.v1` validation, authoritative-versus-client source accounting, detected and potential risk gates, bounded job summaries, and creation-only private report output.
+- Single-pass, Git-ignore-aware collection with deterministic ordering, fixed resource budgets, link/race protection, an overall Action deadline, and an explicit transient retry allowlist.
+
+### Security
+
+- Source and ignore files are never executed and are read through verified file handles with pre/open/post identity and containment checks; source contents, tokens, and host paths are not logged.
+- Impact reports are created exclusively through descriptor-anchored Linux paths below a verified `RUNNER_TEMP` root outside the workspace, with private modes and whole-directory swap detection. Windows Node 24 lacks the portable no-follow/reparse/mode primitives required by the source/report boundary and therefore fails before collection or source submission.
+- Workspace and report roots are now opened component-by-component from pinned parent descriptors; failed reports are scrubbed only through their retained file descriptor, and summary evidence is rendered with inert Markdown punctuation.
+- Runner manifests now enforce the platform's exact portable component grammar, and strict response validation binds every count, affected path, warning path, risk elevation, and Contract Delta identity to the submitted inline manifest.
+- Future v2 releases now verify and attest the checked-in `impact/dist` bundle; this unreleased implementation does not create a tag or release.
+- Report-directory permissions are enforced only through the verified child descriptor, and pre-bind symlink or regular-directory swaps cannot redirect `chmod` to an attacker-selected target.
+- Report v1 validation now mirrors all 47 Contract Delta v1 subject/category/order rules and recomputes exact Impact v1 potential, detected, and Critical risk policy; future semantic engine versions remain structurally validated without inheriting v1 policy.
+- Response-body resets and live upstream aborts use the existing bounded retry/deadline policy instead of being misreported as an expired Action deadline.
+
 ## [2.1.2] - 2026-08-08
 
 ### Fixed

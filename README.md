@@ -78,6 +78,72 @@ The current API completes checks synchronously. A failed policy gate is therefor
 
 The action exposes `check-id`, `project-id`, `status`, `gate-result`, `report-url`, `report-path`, baseline/candidate/upload hashes, `breaking-changes`, `risky-changes`, `policy-failures`, and `policy-warnings`. The full report is written to `report-path` rather than placed in a workflow output.
 
+## Alconite Impact
+
+Alconite Impact is an additive component Action that correlates the typed changes from a completed Contract Guard check with deterministic evidence in Rust, Java, TypeScript, and JavaScript source. The draft component is selected explicitly with:
+
+```yaml
+uses: alconite-inc/alconite-actions/impact@<immutable-sha>
+```
+
+This component is currently unreleased. Use it only from a reviewed immutable commit after its prerequisite Alconite Platform API has been enabled in the intended non-production environment. No tag or production rollout is included in this repository change.
+
+### Contract Guard and Impact workflow
+
+Impact chains to the root Action's emitted `check-id`; it does not upload contracts or duplicate compatibility/risk logic on the runner.
+
+```yaml
+- name: Contract Guard
+  id: contract_guard
+  uses: alconite-inc/alconite-actions@<immutable-sha>
+  with:
+    project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
+    project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
+    candidate-path: openapi/openapi.yaml
+
+- name: Alconite Impact
+  id: impact
+  if: ${{ always() && steps.contract_guard.outputs.check-id != '' }}
+  uses: alconite-inc/alconite-actions/impact@<same-immutable-sha>
+  with:
+    project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
+    project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
+    check-id: ${{ steps.contract_guard.outputs.check-id }}
+
+- name: Preserve the private Impact report
+  if: ${{ always() && steps.impact.outputs.report-path != '' }}
+  uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+  with:
+    name: impact-report
+    path: ${{ steps.impact.outputs.report-path }}
+```
+
+The project token needs the root Contract Guard Action's existing scopes plus the explicit `impact:write` scope. `always()` allows Impact to analyze a completed check after Contract Guard emits a check ID even when the release-policy gate fails; it does not clear the failed Contract Guard step or job. Authentication, upload, or submission failures emit no check ID, so the condition skips Impact.
+
+### Inputs, outputs, and gates
+
+Required inputs are `project-id`, `project-token`, and `check-id`. Optional inputs are `source-root`, `api-url`, `additional-ignore`, `include-generated-directories`, `timeout-seconds`, `attempts`, `fail-on-risk`, and `fail-on-potential-risk`; exact defaults and descriptions are in [impact/action.yml](impact/action.yml). There is deliberately no report-path input.
+
+`fail-on-risk` evaluates source-evidenced `overallRisk`. `fail-on-potential-risk` independently evaluates `overallPotentialRisk`, which preserves the severity of an unmatched contract change. Each accepts `never`, `low`, `medium`, `high`, or `critical` and fails for a result at or above the selected threshold. Both default to `never`. Outputs are set and the canonical report is written before either gate is applied.
+
+The Action exposes the linked check ID, both risk values, breaking/affected counts, authoritative scanned/skipped counts, runner collection counts, truncation state, analysis fingerprint, and `report-path`. `report-path` is output-only and names a fresh `0600` file inside a fresh `0700` directory below verified `RUNNER_TEMP`, outside the workspace. The report remains runner-local unless a later explicit workflow step copies or uploads it. If report creation fails, the Action zeroes only the still-open file descriptor and leaves the private invocation directory for runner cleanup; it never deletes a raced pathname. The job summary contains bounded HTML-escaped, Markdown-inert evidence only—never source snippets.
+
+### Source collection and privacy
+
+`GITHUB_WORKSPACE` is the only source namespace. `source-root` and every evidence/manifest path are portable workspace-relative paths. Components containing control characters, Windows-invalid punctuation, trailing dot/space, or reserved device names are rejected before that entry can be read or submitted, so the runner and Rust service use the same path grammar. Collection is deterministic and single-pass; it supports `.rs`, `.java`, `.ts`, `.tsx`, `.js`, and `.jsx`, applies repository and nested `.gitignore` files plus at most 20 non-empty additional ignore-only patterns, and always excludes `.git`. Generated/vendor directories are excluded unless `include-generated-directories: true` is explicit.
+
+The Standard profile visits at most 20,000 entries and 5,000 directories; reads at most 128 `.gitignore` files, 512 KiB of ignore data, and 10,000 ignore patterns; submits at most 2,000 source files/2,500 manifest entries and 16 MiB decoded source; accepts files up to 512 KiB, paths up to 512 bytes, and depth 32. `timeout-seconds` is one 1–600 second deadline (120 by default) beginning before workspace access and covering collection, retries, response validation, and private report output. Crossing a repository-wide budget fails instead of publishing a partial risk result. Binary, invalid UTF-8, oversized, overlong, deep, ignored, unsupported, and link entries receive bounded aggregate accounting; individual skipped paths are not sent.
+
+The Action never executes source, repository scripts, Git, hooks, build tools, or package managers. It never logs source contents, the project token, absolute source paths, or request bodies. The platform independently validates every submitted entry, and only its `metadata.serverScan` accounting is authoritative. Local `metadata.clientCollection` is explicitly non-authoritative and echoed only for reconciliation.
+
+Report v1 validation enforces the exact Contract Delta v1 category, typed-subject, and canonical-order contract and independently recomputes Impact v1 potential, detected, and Critical risk values. Newer positive semantic engine integers retain the strict report-v1 wire, bounds, identity, count, and structural checks without being interpreted through older v1 policy.
+
+On Linux, every `GITHUB_WORKSPACE` and `RUNNER_TEMP` root component is opened from its pinned parent descriptor with `O_NOFOLLOW | O_DIRECTORY` before the ambient name is trusted. Source reads then use `O_NOFOLLOW` plus stable descriptor identity and final containment checks. Report creation anchors the verified `RUNNER_TEMP` root, fresh child directory, and exclusive file through Linux descriptors and `/proc/self/fd`, while rechecking the ambient output path before any report bytes are written. Node 24 does not expose equivalent Windows no-follow/reparse attributes or enforceable private POSIX report modes, so the Action fails closed before workspace traversal or network submission. Use a supported Linux GitHub runner for this component.
+
+Only network or response-body transport failures, gateway HTTP 502, gateway 504 without a valid Impact error, the exact `429` + `impact_analysis_busy` pair, and the exact `503` + `impact_storage_unavailable` pair are retried. Redirects, mismatched status/code pairs, authentication/scope errors, disabled/timeout/internal errors, check history errors, payload limits, and deterministic contract/symbol/token/evidence/report complexity errors are never retried.
+
+Impact's lexical evidence is deterministic but heuristic: it does not resolve imports, execute compilers, infer property renames, or prove the absence of a consumer. The report therefore separates potential risk from detected risk and explains every returned confidence/evidence decision. Registered repositories, dependency graphs, runtime telemetry, PR annotations, and automated remediation remain future work.
+
 ## Runtime Verify
 
 Runtime Verify is an additive component Action in the 2.1 release line. The repository root remains Contract Guard; Runtime Verify is selected explicitly with:

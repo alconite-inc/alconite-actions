@@ -4,6 +4,7 @@ const reviewedDirectDependencies = new Map([
   ['@apidevtools/swagger-parser', 'MIT'],
   ['ajv', 'MIT'],
   ['ajv-formats', 'MIT'],
+  ['ignore', 'MIT'],
   ['yaml', 'ISC']
 ]);
 
@@ -35,4 +36,9 @@ if (bundle && bundle.size > 5 * 1024 * 1024) {
   throw new Error(`Runtime Verify bundle is unexpectedly large: ${bundle.size} bytes`);
 }
 
-console.log(`Reviewed ${reviewedPackages.size} bundled runtime dependency licenses; bundle size is within policy.`);
+const impactBundle = await stat('impact/dist/index.js').catch(() => undefined);
+if (impactBundle && impactBundle.size > 2 * 1024 * 1024) {
+  throw new Error(`Impact bundle is unexpectedly large: ${impactBundle.size} bytes`);
+}
+
+console.log(`Reviewed ${reviewedPackages.size} bundled runtime dependency licenses; component bundle sizes are within policy.`);

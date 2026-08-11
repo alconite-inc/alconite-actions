@@ -43,9 +43,9 @@ jobs:
       - name: Verify checked-in JavaScript builds
         shell: bash
         run: |
-          if ! git diff --quiet -- dist runtime-verify/dist; then
+          if ! git diff --quiet -- dist runtime-verify/dist impact/dist; then
             echo "::error::A checked-in distribution is stale. Run 'npm run build' with the locked dependencies and commit the generated files."
-            git diff --name-only -- dist runtime-verify/dist
+            git diff --name-only -- dist runtime-verify/dist impact/dist
             exit 1
           fi
       - name: Install actionlint

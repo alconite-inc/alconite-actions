@@ -7,9 +7,10 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "npm run build:contract-guard && npm run build:runtime-verify",
+    "build": "npm run build:contract-guard && npm run build:runtime-verify && npm run build:impact",
     "build:contract-guard": "tsc -p tsconfig.build.json",
     "build:runtime-verify": "node scripts/build-runtime-verify.mjs",
+    "build:impact": "node scripts/build-impact.mjs",
     "build:test": "tsc -p tsconfig.test.json",
     "test": "npm run build:test && node --test build/test/*.test.js build/test/runtime-verify/*.test.js",
     "typecheck": "tsc --noEmit",
@@ -21,6 +22,7 @@
     "@apidevtools/swagger-parser": "12.1.0",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
+    "ignore": "7.0.6",
     "yaml": "2.9.0"
   },
   "devDependencies": {

@@ -41,7 +41,7 @@ jobs:
       - run: npm ci
       - run: npm run verify
       - name: Require reproducible checked-in build
-        run: git diff --exit-code -- dist runtime-verify/dist
+        run: git diff --exit-code -- dist runtime-verify/dist impact/dist
       - name: Attest Contract Guard JavaScript build
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
         with:
@@ -50,6 +50,10 @@ jobs:
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
         with:
           subject-path: runtime-verify/dist/**
+      - name: Attest Impact JavaScript build
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
+        with:
+          subject-path: impact/dist/**
       - name: Create GitHub release
         shell: bash
         env:

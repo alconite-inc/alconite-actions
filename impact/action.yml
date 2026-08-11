@@ -1,0 +1,86 @@
+name: Alconite Impact
+author: Alconite Engineering
+description: Analyze a completed Contract Guard check against bounded source files in the current workspace.
+
+branding:
+  icon: activity
+  color: blue
+
+inputs:
+  project-id:
+    description: Stable Contract Guard project identifier beginning with cgprj_.
+    required: true
+  project-token:
+    description: Project-scoped bearer token with the impact:write scope.
+    required: true
+  check-id:
+    description: Completed Contract Guard check identifier emitted by the root Action.
+    required: true
+  source-root:
+    description: Portable selection root relative to GITHUB_WORKSPACE; evidence paths remain workspace-relative.
+    required: false
+    default: .
+  api-url:
+    description: Alconite Platform API base URL.
+    required: false
+    default: https://alconite.com
+  additional-ignore:
+    description: Optional newline-separated ignore-only patterns based at source-root.
+    required: false
+    default: ""
+  include-generated-directories:
+    description: Include fixed generated and vendor directories other than .git.
+    required: false
+    default: "false"
+  timeout-seconds:
+    description: Overall collection, request, validation, and report-write deadline from 1 through 600 seconds.
+    required: false
+    default: "120"
+  attempts:
+    description: Total bounded attempts for the explicit transient retry allowlist, from 1 through 5.
+    required: false
+    default: "3"
+  fail-on-risk:
+    description: Detected-risk threshold (never, low, medium, high, or critical).
+    required: false
+    default: never
+  fail-on-potential-risk:
+    description: Potential-risk threshold (never, low, medium, high, or critical).
+    required: false
+    default: never
+
+outputs:
+  check-id:
+    description: Completed Contract Guard check identifier analyzed by Impact.
+  overall-risk:
+    description: Highest source-evidenced risk (NONE, LOW, MEDIUM, HIGH, or CRITICAL).
+  overall-potential-risk:
+    description: Highest contract-change severity independent of discovered source evidence.
+  breaking-changes:
+    description: Number of breaking ephemeral contract deltas.
+  affected-files:
+    description: Number of distinct source files affected before report truncation.
+  affected-source-locations:
+    description: Number of affected source locations before report truncation.
+  files-scanned:
+    description: Number of source files scanned by the authoritative platform engine.
+  files-skipped:
+    description: Number of submitted entries skipped by the authoritative platform engine.
+  client-entries-visited:
+    description: Number of entries visited by the bounded runner collector.
+  client-files-discovered:
+    description: Number of file entries discovered by the runner collector.
+  client-files-submitted:
+    description: Number of supported UTF-8 source files submitted to Impact.
+  client-files-skipped:
+    description: Number of file entries skipped by the runner collector.
+  report-path:
+    description: Absolute path to a fresh private report file below verified RUNNER_TEMP.
+  report-truncated:
+    description: Whether bounded response packing omitted locations, evidence, or warnings.
+  analysis-fingerprint:
+    description: Deterministic fingerprint of the contract, source manifest, options, and engine semantics.
+
+runs:
+  using: node24
+  main: dist/index.js
