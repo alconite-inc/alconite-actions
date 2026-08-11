@@ -758,7 +758,8 @@ var ImpactContractError = class extends Error {
     this.name = "ImpactContractError";
   }
 };
-var HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"]);
+var HTTP_METHOD_VALUES = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "TRACE"];
+var HTTP_METHODS = new Set(HTTP_METHOD_VALUES);
 var CLASSIFICATION_VALUES = ["breaking", "risky", "non_breaking", "informational"];
 var CATEGORY_VALUES = [
   "operation",
@@ -884,7 +885,7 @@ function validateClientCollection(value, context) {
   if (directories > entries || discovered !== submitted + skipped) mismatch(`${context} contains inconsistent counts`);
   if (validateSkipCounts(item.skipCounts, `${context}.skipCounts`) !== skipped) mismatch(`${context}.skipCounts is inconsistent`);
 }
-function validateSubject(value, kind) {
+function validateSubject(value, kind, enforceV1Semantics) {
   const item = record(value, "change.subject", [
     "operation",
     "schema",
@@ -933,12 +934,25 @@ function validateSubject(value, kind) {
     if (item[key] !== null) present.add(key);
   }
   if (present.size === 0) mismatch("change.subject must contain at least one subject");
-  validateSubjectForKind(item, present, kind);
+  if (enforceV1Semantics) validateSubjectForKind(item, present, kind);
   return item;
 }
 function requireExactSubject(present, required, kind) {
   const requiredSet = new Set(required);
   if (present.size !== requiredSet.size || [...present].some((key) => !requiredSet.has(key))) {
+    mismatch(`change.subject does not match ${kind}`);
+  }
+}
+function requireSubjectWithOptional(present, required, optional, kind) {
+  const requiredSet = new Set(required);
+  const allowed = /* @__PURE__ */ new Set([...required, ...optional]);
+  if ([...requiredSet].some((key) => !present.has(key)) || [...present].some((key) => !allowed.has(key))) {
+    mismatch(`change.subject does not match ${kind}`);
+  }
+}
+function requireDirectionalSchema(item, requiredUse, propertyRequired, kind) {
+  const schema = item.schema;
+  if (schema.property !== null !== propertyRequired || !schema.uses.includes(requiredUse) || schema.uses.includes("UNKNOWN")) {
     mismatch(`change.subject does not match ${kind}`);
   }
 }
@@ -982,10 +996,16 @@ function validateSubjectForKind(item, present, kind) {
   if (kind === "PARAMETER_ENUM_VALUE_ADDED" || kind === "PARAMETER_ENUM_VALUE_REMOVED") {
     return requireExactSubject(present, ["operation", "parameter", "enumValue"], kind);
   }
-  if (requestSchemaKinds.has(kind)) return requireExactSubject(present, ["operation", "schema"], kind);
+  if (requestSchemaKinds.has(kind)) {
+    requireExactSubject(present, ["operation", "schema"], kind);
+    return requireDirectionalSchema(item, "REQUEST", false, kind);
+  }
   if (requestMediaKinds.has(kind)) return requireExactSubject(present, ["operation", "mediaType"], kind);
   if (responseKinds.has(kind)) return requireExactSubject(present, ["operation", "responseStatus"], kind);
-  if (responseSchemaKinds.has(kind)) return requireExactSubject(present, ["operation", "responseStatus", "schema"], kind);
+  if (responseSchemaKinds.has(kind)) {
+    requireExactSubject(present, ["operation", "responseStatus", "schema"], kind);
+    return requireDirectionalSchema(item, "RESPONSE", false, kind);
+  }
   if (responseMediaKinds.has(kind)) return requireExactSubject(present, ["operation", "responseStatus", "mediaType"], kind);
   if (schemaKinds.has(kind)) {
     requireExactSubject(present, ["schema"], kind);
@@ -995,13 +1015,14 @@ function validateSubjectForKind(item, present, kind) {
   if (propertyKinds.has(kind)) {
     requireExactSubject(present, ["schema"], kind);
     if (item.schema.property === null) mismatch(`${kind} requires a schema property`);
+    if (kind === "REQUIRED_REQUEST_PROPERTY_ADDED") requireDirectionalSchema(item, "REQUEST", true, kind);
     return;
   }
   if (kind === "ENUM_VALUE_ADDED" || kind === "ENUM_VALUE_REMOVED") {
     return requireExactSubject(present, ["schema", "enumValue"], kind);
   }
   if (kind === "SECURITY_REQUIREMENT_STRENGTHENED" || kind === "SECURITY_REQUIREMENT_WEAKENED") {
-    return requireExactSubject(present, ["operation"], kind);
+    return requireSubjectWithOptional(present, ["operation"], ["securityScheme"], kind);
   }
   if (kind === "SECURITY_SCOPE_ADDED" || kind === "SECURITY_SCOPE_REMOVED") {
     return requireExactSubject(present, ["operation", "securityScope"], kind);
@@ -1092,6 +1113,74 @@ function validateConfidenceBasis(value, confidence, risk, affectedFiles, highCon
   }
 }
 var DESTRUCTIVE_REMOVALS = /* @__PURE__ */ new Set(["ENDPOINT_REMOVED", "HTTP_METHOD_REMOVED", "SCHEMA_REMOVED"]);
+var V1_POTENTIAL_RISK_POLICY = {
+  ENDPOINT_ADDED: "LOW",
+  ENDPOINT_REMOVED: "HIGH",
+  HTTP_METHOD_ADDED: "LOW",
+  HTTP_METHOD_REMOVED: "HIGH",
+  PARAMETER_ADDED: "LOW",
+  REQUIRED_PARAMETER_ADDED: "HIGH",
+  PARAMETER_REMOVED: "HIGH",
+  PARAMETER_TYPE_CHANGED: "HIGH",
+  PARAMETER_REQUIREMENT_CHANGED: "REQUIREMENT",
+  PARAMETER_CONSTRAINT_CHANGED: "MEDIUM",
+  PARAMETER_ENUM_VALUE_ADDED: "LOW",
+  PARAMETER_ENUM_VALUE_REMOVED: "HIGH",
+  REQUEST_BODY_ADDED: "BREAKING_ADDITION",
+  REQUIRED_REQUEST_BODY_ADDED: "HIGH",
+  REQUEST_BODY_REMOVED: "MEDIUM",
+  REQUEST_BODY_REQUIREMENT_CHANGED: "REQUIREMENT",
+  REQUEST_SCHEMA_CHANGED: "HIGH",
+  REQUEST_MEDIA_TYPE_ADDED: "LOW",
+  REQUEST_MEDIA_TYPE_REMOVED: "HIGH",
+  RESPONSE_ADDED: "LOW",
+  RESPONSE_REMOVED: "HIGH",
+  RESPONSE_SCHEMA_CHANGED: "HIGH",
+  RESPONSE_MEDIA_TYPE_ADDED: "LOW",
+  RESPONSE_MEDIA_TYPE_REMOVED: "HIGH",
+  SCHEMA_ADDED: "LOW",
+  SCHEMA_REMOVED: "HIGH",
+  PROPERTY_ADDED: "LOW",
+  PROPERTY_REMOVED: "HIGH",
+  PROPERTY_TYPE_CHANGED: "HIGH",
+  PROPERTY_REQUIREMENT_CHANGED: "PROPERTY_REQUIREMENT",
+  PROPERTY_CONSTRAINT_CHANGED: "MEDIUM",
+  REQUIRED_REQUEST_PROPERTY_ADDED: "HIGH",
+  ENUM_VALUE_ADDED: "LOW",
+  ENUM_VALUE_REMOVED: "HIGH",
+  OPERATION_ID_CHANGED: "MEDIUM",
+  DEPRECATION_CHANGED: "LOW",
+  SECURITY_REQUIREMENT_STRENGTHENED: "HIGH",
+  SECURITY_REQUIREMENT_WEAKENED: "MEDIUM",
+  SECURITY_SCHEME_ADDED: "LOW",
+  SECURITY_SCHEME_REMOVED: "HIGH",
+  SECURITY_SCOPE_ADDED: "BREAKING_ADDITION",
+  SECURITY_SCOPE_REMOVED: "MEDIUM",
+  SERVER_ADDED: "LOW",
+  SERVER_REMOVED: "MEDIUM",
+  METADATA_CHANGED: "LOW",
+  ANALYZER_REGRESSION: "MEDIUM",
+  ANALYZER_RESOLUTION: "LOW"
+};
+function expectedPotentialRiskV1(kind, classification, subject) {
+  const policy = V1_POTENTIAL_RISK_POLICY[kind];
+  if (policy === "REQUIREMENT") {
+    if (classification === "breaking") return "HIGH";
+    return classification === "non_breaking" ? "LOW" : "MEDIUM";
+  }
+  if (policy === "BREAKING_ADDITION") return classification === "breaking" ? "HIGH" : "LOW";
+  if (policy === "PROPERTY_REQUIREMENT") {
+    if (classification === "breaking" && subject.schema?.uses.length === 1 && subject.schema.uses[0] === "REQUEST") {
+      return "HIGH";
+    }
+    return classification === "non_breaking" ? "LOW" : "MEDIUM";
+  }
+  return policy;
+}
+function expectedDetectedRiskV1(potentialRisk, kind, affectedFiles, highConfidenceFiles) {
+  if (affectedFiles === 0) return "NONE";
+  return potentialRisk === "HIGH" && DESTRUCTIVE_REMOVALS.has(kind) && affectedFiles >= 10 && highConfidenceFiles >= 5 ? "CRITICAL" : potentialRisk;
+}
 function expectedCategory(kind) {
   switch (kind) {
     case "ENDPOINT_ADDED":
@@ -1154,7 +1243,7 @@ function expectedCategory(kind) {
       return "analyzer_resolution";
   }
 }
-function validateChange(value, impactEngineVersion) {
+function validateChange(value, engines) {
   const item = record(value, "change", [
     "id",
     "deltaFingerprint",
@@ -1183,16 +1272,22 @@ function validateChange(value, impactEngineVersion) {
   if (typeof item.deltaFingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(item.deltaFingerprint)) mismatch("change.deltaFingerprint is invalid");
   if (item.id !== `cgdelta_${item.deltaFingerprint.slice(0, 32)}`) mismatch("change.id does not match its delta fingerprint");
   const kind = enumValue(item.kind, "change.kind", CHANGE_KIND_SET);
-  enumValue(item.classification, "change.classification", CLASSIFICATIONS);
+  const classification = enumValue(
+    item.classification,
+    "change.classification",
+    CLASSIFICATIONS
+  );
   const category = enumValue(item.category, "change.category", CATEGORIES);
-  if (category !== expectedCategory(kind)) mismatch("change.category does not match its semantic kind");
+  if (engines.contractDelta === 1 && category !== expectedCategory(kind)) {
+    mismatch("change.category does not match its Contract Delta engine v1 semantic kind");
+  }
   byteString(item.ruleId, "change.ruleId", 1, 64);
   integer(item.ruleVersion, "change.ruleVersion", 1, U32_MAX);
   stringValue(item.summary, "change.summary", 1, 200);
   stringValue(item.explanation, "change.explanation", 1, 1e3);
   if (item.baselineValue !== null) stringValue(item.baselineValue, "change.baselineValue", 0, 500);
   if (item.candidateValue !== null) stringValue(item.candidateValue, "change.candidateValue", 0, 500);
-  validateSubject(item.subject, kind);
+  const subject = validateSubject(item.subject, kind, engines.contractDelta === 1);
   const potentialRisk = enumValue(item.potentialRisk, "change.potentialRisk", RISK_SET);
   const risk = enumValue(item.risk, "change.risk", RISK_SET);
   const confidence = item.confidence === null ? null : enumValue(item.confidence, "change.confidence", CONFIDENCE_SET);
@@ -1201,7 +1296,7 @@ function validateChange(value, impactEngineVersion) {
   const omitted = integer(item.omittedAffectedLocationCount, "change.omittedAffectedLocationCount", 0, STANDARD_MAX_AFFECTED_LOCATIONS);
   const files = integer(item.affectedFileCount, "change.affectedFileCount", 0, STANDARD_MAX_AFFECTED_FILES);
   const highFiles = integer(item.highConfidenceFileCount, "change.highConfidenceFileCount", 0, STANDARD_MAX_AFFECTED_FILES);
-  validateConfidenceBasis(item.confidenceBasis, confidence, risk, files, highFiles, impactEngineVersion);
+  validateConfidenceBasis(item.confidenceBasis, confidence, risk, files, highFiles, engines.impactAnalysis);
   const sources = arrayValue(item.affectedSources, "change.affectedSources", 200).map(validateAffectedSource);
   for (let index = 1; index < sources.length; index += 1) {
     const left = sources[index - 1];
@@ -1229,10 +1324,12 @@ function validateChange(value, impactEngineVersion) {
       mismatch("change confidence is inconsistent with its complete affected-source counts");
     }
   }
-  if (total > 0 && impactEngineVersion === 1) {
-    const criticalElevation = risk === "CRITICAL" && potentialRisk === "HIGH" && DESTRUCTIVE_REMOVALS.has(kind);
-    if (risk === "CRITICAL" && !criticalElevation) mismatch("change Critical risk is not a valid destructive-removal elevation");
-    if (risk !== potentialRisk && !criticalElevation) mismatch("change risk does not match its potential risk");
+  if (engines.impactAnalysis === 1) {
+    const expectedPotential = expectedPotentialRiskV1(kind, classification, subject);
+    const expectedRisk = expectedDetectedRiskV1(expectedPotential, kind, files, highFiles);
+    if (potentialRisk !== expectedPotential || risk !== expectedRisk) {
+      mismatch("change risk values disagree with Impact engine v1 policy");
+    }
   }
   const recommendation = record(item.recommendation, "change.recommendation", ["code", "message"]);
   if (typeof recommendation.code !== "string" || !/^[a-z][a-z0-9_]{0,99}$/u.test(recommendation.code)) {
@@ -1254,7 +1351,7 @@ function compareOptionalObject(left, right, compare) {
   return compare(left, right);
 }
 function compareSubject(left, right) {
-  const operation = compareOptionalObject(left.operation, right.operation, (a, b) => compareUtf8(a.path, b.path) || compareUtf8(a.method, b.method) || compareOptionalString(a.baselineOperationId, b.baselineOperationId) || compareOptionalString(a.candidateOperationId, b.candidateOperationId));
+  const operation = compareOptionalObject(left.operation, right.operation, (a, b) => compareUtf8(a.path, b.path) || HTTP_METHOD_VALUES.indexOf(a.method) - HTTP_METHOD_VALUES.indexOf(b.method) || compareOptionalString(a.baselineOperationId, b.baselineOperationId) || compareOptionalString(a.candidateOperationId, b.candidateOperationId));
   if (operation !== 0) return operation;
   const schema = compareOptionalObject(left.schema, right.schema, (a, b) => {
     const identity = compareUtf8(a.name, b.name) || compareOptionalString(a.property, b.property);
@@ -1271,8 +1368,7 @@ function compareSubject(left, right) {
     return a.uses.length - b.uses.length;
   });
   if (schema !== 0) return schema;
-  const locations = ["PATH", "QUERY", "HEADER", "COOKIE"];
-  const parameter = compareOptionalObject(left.parameter, right.parameter, (a, b) => compareUtf8(a.name, b.name) || locations.indexOf(a.location) - locations.indexOf(b.location));
+  const parameter = compareOptionalObject(left.parameter, right.parameter, (a, b) => compareUtf8(a.name, b.name) || compareUtf8(a.location, b.location));
   if (parameter !== 0) return parameter;
   return compareOptionalString(left.responseStatus, right.responseStatus) || compareOptionalString(left.mediaType, right.mediaType) || compareOptionalString(left.enumValue, right.enumValue) || compareOptionalString(left.securityScheme, right.securityScheme) || compareOptionalString(left.securityScope, right.securityScope) || compareOptionalString(left.metadataPointer, right.metadataPointer);
 }
@@ -1381,7 +1477,10 @@ function validateEngines(value) {
     "contractDeltaEngineVersion",
     "impactAnalysisEngineVersion"
   ]) integer(item[key], `engines.${key}`, 1, U32_MAX);
-  return item.impactAnalysisEngineVersion;
+  return {
+    contractDelta: item.contractDeltaEngineVersion,
+    impactAnalysis: item.impactAnalysisEngineVersion
+  };
 }
 function validateImpactReport(value, expectedProjectId, expectedCheckId) {
   const item = record(value, "report", [
@@ -1402,7 +1501,7 @@ function validateImpactReport(value, expectedProjectId, expectedCheckId) {
     mismatch("analysisFingerprint is invalid");
   }
   validateContract(item.contract, expectedProjectId, expectedCheckId);
-  const impactEngineVersion = validateEngines(item.engines);
+  const engines = validateEngines(item.engines);
   const overallRisk = enumValue(item.overallRisk, "overallRisk", RISK_SET);
   const overallPotentialRisk = enumValue(item.overallPotentialRisk, "overallPotentialRisk", RISK_SET);
   const breaking = integer(item.breakingChanges, "breakingChanges", 0, 1e3);
@@ -1413,14 +1512,16 @@ function validateImpactReport(value, expectedProjectId, expectedCheckId) {
     0,
     STANDARD_MAX_AFFECTED_LOCATIONS
   );
-  const changes = arrayValue(item.changes, "changes", 1e3).map((change) => validateChange(change, impactEngineVersion));
+  const changes = arrayValue(item.changes, "changes", 1e3).map((change) => validateChange(change, engines));
   if (new Set(changes.map((change) => change.id)).size !== changes.length || new Set(changes.map((change) => change.deltaFingerprint)).size !== changes.length) {
     mismatch("changes must have unique identities");
   }
-  for (let index = 1; index < changes.length; index += 1) {
-    const left = changes[index - 1];
-    const right = changes[index];
-    if (!left || !right || compareChanges(left, right) >= 0) mismatch("changes must use canonical Contract Delta ordering");
+  if (engines.contractDelta === 1) {
+    for (let index = 1; index < changes.length; index += 1) {
+      const left = changes[index - 1];
+      const right = changes[index];
+      if (!left || !right || compareChanges(left, right) >= 0) mismatch("changes must use canonical Contract Delta ordering");
+    }
   }
   if (changes.filter((change) => change.classification === "breaking").length !== breaking) mismatch("breakingChanges is inconsistent");
   const completeLocations = changes.reduce((total2, change) => total2 + change.affectedLocationCount, 0);
@@ -1570,6 +1671,12 @@ function validateImpactReportForRequest(report, request) {
 // src/impact/platform-client.ts
 var MAX_REQUEST_BYTES = 24 * 1024 * 1024;
 var MAX_ERROR_BYTES = 64 * 1024;
+var ResponseBodyTransportError = class extends Error {
+  constructor(cause) {
+    super("The Alconite Impact response body transport failed.", { cause });
+    this.name = "ResponseBodyTransportError";
+  }
+};
 function validateProjectId(value) {
   const projectId = value.trim();
   if (!/^cgprj_[0-9a-f]{32}$/u.test(projectId)) {
@@ -1645,16 +1752,8 @@ async function readBoundedBytes(response, maximumBytes, deadline) {
       result = await readWithDeadline(reader, deadlineSignal);
     } catch (error2) {
       void reader.cancel().catch(() => void 0);
-      if (error2 instanceof ImpactActionError && error2.code === "action_deadline_exceeded") throw error2;
-      try {
-        deadline.throwIfExpired();
-      } catch (deadlineError) {
-        throw deadlineError;
-      }
-      if (error2 instanceof DOMException && (error2.name === "AbortError" || error2.name === "TimeoutError")) {
-        throw deadlineExceeded();
-      }
-      throw error2;
+      deadline.throwIfExpired();
+      throw new ResponseBodyTransportError(error2);
     }
     const { done, value } = result;
     if (done) break;
@@ -1757,7 +1856,17 @@ var ImpactPlatformClient = class {
             status: response.status
           });
         }
-        const raw = await readBoundedJson(response, MAX_REPORT_BYTES, this.options.deadline);
+        let raw;
+        try {
+          raw = await readBoundedJson(response, MAX_REPORT_BYTES, this.options.deadline);
+        } catch (error2) {
+          if (!(error2 instanceof ResponseBodyTransportError)) throw error2;
+          lastNetworkError = error2.cause;
+          this.options.deadline.throwIfExpired();
+          if (attempt >= this.options.attempts) break;
+          await this.options.deadline.wait(backoff(attempt));
+          continue;
+        }
         this.options.deadline.throwIfExpired();
         const report = validateImpactReportForRequest(
           validateImpactReport(raw, this.options.projectId, this.options.checkId),
@@ -1776,6 +1885,13 @@ var ImpactPlatformClient = class {
         rawError = await readBoundedJson(response, MAX_ERROR_BYTES, this.options.deadline);
       } catch (error2) {
         if (error2 instanceof ImpactActionError && error2.code === "action_deadline_exceeded") throw error2;
+        if (error2 instanceof ResponseBodyTransportError) {
+          lastNetworkError = error2.cause;
+          this.options.deadline.throwIfExpired();
+          if (attempt >= this.options.attempts) break;
+          await this.options.deadline.wait(backoff(attempt));
+          continue;
+        }
         rawError = void 0;
       }
       const envelope = errorEnvelope(rawError);
@@ -2199,20 +2315,28 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
     });
     const directoryName = import_node_path2.default.basename(createdDescriptorPath);
     const createdPath = import_node_path2.default.join(root.path, directoryName);
-    await import_node_fs3.promises.chmod(createdDescriptorPath, 448);
     const descriptorStats = await import_node_fs3.promises.lstat(createdDescriptorPath, { bigint: true });
-    const ambientStats = await import_node_fs3.promises.lstat(createdPath, { bigint: true });
-    if (!descriptorStats.isDirectory() || descriptorStats.isSymbolicLink() || !ambientStats.isDirectory() || ambientStats.isSymbolicLink()) {
+    if (!descriptorStats.isDirectory() || descriptorStats.isSymbolicLink()) {
       throw new ImpactActionError("unsupported_secure_report_filesystem", "The private Impact report directory is not a regular directory.");
     }
-    const childIdentity = fileIdentity(descriptorStats);
-    if (!sameReportDirectoryObject(childIdentity, fileIdentity(ambientStats))) {
+    const provisionalDirectory = {
+      path: createdDescriptorPath,
+      realPath: createdDescriptorPath,
+      identity: fileIdentity(descriptorStats)
+    };
+    await hooks.afterDirectoryNameCreated?.(createdPath);
+    directoryHandle = await openReportDirectory(provisionalDirectory, "private report directory");
+    await directoryHandle.chmod(448);
+    const securedStats = await directoryHandle.stat({ bigint: true });
+    const childIdentity = fileIdentity(securedStats);
+    const descriptorRealPath = await import_node_fs3.promises.realpath(descriptorPath2(directoryHandle));
+    const ambientStats = await import_node_fs3.promises.lstat(createdPath, { bigint: true });
+    const ambientRealPath = await import_node_fs3.promises.realpath(createdPath);
+    if (!ambientStats.isDirectory() || ambientStats.isSymbolicLink() || !sameReportDirectoryObject(childIdentity, fileIdentity(ambientStats)) || (Number(securedStats.mode) & 511) !== 448 || !samePath(descriptorRealPath, ambientRealPath)) {
       throw new ImpactActionError("unsupported_secure_report_filesystem", "The private Impact report directory path changed during creation.");
     }
-    const directoryRealPath = await import_node_fs3.promises.realpath(createdPath);
-    directory = { path: createdPath, realPath: directoryRealPath, identity: childIdentity };
-    directoryHandle = await openReportDirectory(directory, "private report directory");
-    if ((Number(descriptorStats.mode) & 511) !== 448 || !isContained(root.realPath, directory.realPath, false)) {
+    directory = { path: createdPath, realPath: descriptorRealPath, identity: childIdentity };
+    if (!isContained(root.realPath, directory.realPath, false)) {
       throw new ImpactActionError("unsupported_secure_report_filesystem", "The private Impact report directory failed mode or containment verification.");
     }
     await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);

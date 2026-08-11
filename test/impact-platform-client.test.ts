@@ -179,6 +179,67 @@ test('maps a stalled response-body read to the overall Action deadline', async (
   );
 });
 
+test('retries response-body transport resets and live upstream aborts within the shared deadline', async () => {
+  for (const failure of [
+    new TypeError('upstream reset'),
+    new DOMException('upstream aborted this body', 'AbortError'),
+    new DOMException('upstream timed out this body', 'TimeoutError'),
+    new ImpactActionError('action_deadline_exceeded', 'a live response body cannot expire the shared deadline'),
+  ]) {
+    let now = 0;
+    let attempts = 0;
+    const retryDeadline = new ActionDeadline(30_000, {
+      now: () => now,
+      sleep: async (milliseconds) => { now += milliseconds; },
+    });
+    const result = await client(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) { controller.error(failure); },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify(await responseFixture()), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }, 2, retryDeadline).analyze(request());
+    assert.equal(result.overallRisk, 'HIGH');
+    assert.equal(attempts, 2);
+  }
+
+  let errorAttempts = 0;
+  let errorNow = 0;
+  const errorDeadline = new ActionDeadline(30_000, {
+    now: () => errorNow,
+    sleep: async (milliseconds) => { errorNow += milliseconds; },
+  });
+  const recovered = await client(async () => {
+    errorAttempts += 1;
+    if (errorAttempts === 1) {
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.error(new TypeError('error envelope reset')); },
+      }), { status: 503, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(JSON.stringify(await responseFixture()), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }, 2, errorDeadline).analyze(request());
+  assert.equal(recovered.overallRisk, 'HIGH');
+  assert.equal(errorAttempts, 2);
+});
+
+test('reports an exhausted response-body reset as a bounded platform request failure', async () => {
+  await assert.rejects(
+    client(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.error(new DOMException('live abort', 'AbortError')); },
+    }), { status: 200, headers: { 'content-type': 'application/json' } })).analyze(request()),
+    (error: unknown) => error instanceof ImpactActionError &&
+      error.code === 'platform_request_failed' && !/deadline/u.test(error.message),
+  );
+});
+
 test('never awaits an adversarial response cancellation promise', async () => {
   const neverCancellingBody = (): ReadableStream<Uint8Array> => new ReadableStream<Uint8Array>({
     start(controller) { controller.enqueue(new TextEncoder().encode('{}')); },

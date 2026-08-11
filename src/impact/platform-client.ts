@@ -25,6 +25,13 @@ interface PlatformErrorEnvelope {
   code: string;
 }
 
+class ResponseBodyTransportError extends Error {
+  public constructor(cause: unknown) {
+    super('The Alconite Impact response body transport failed.', { cause });
+    this.name = 'ResponseBodyTransportError';
+  }
+}
+
 export function validateProjectId(value: string): string {
   const projectId = value.trim();
   if (!/^cgprj_[0-9a-f]{32}$/u.test(projectId)) {
@@ -112,16 +119,10 @@ async function readBoundedBytes(response: Response, maximumBytes: number, deadli
       // Cancellation is best-effort: an adversarial stream must not extend the Action deadline by
       // returning a never-settling cancellation promise.
       void reader.cancel().catch(() => undefined);
-      if (error instanceof ImpactActionError && error.code === 'action_deadline_exceeded') throw error;
-      try {
-        deadline.throwIfExpired();
-      } catch (deadlineError) {
-        throw deadlineError;
-      }
-      if (error instanceof DOMException && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
-        throw deadlineExceeded();
-      }
-      throw error;
+      deadline.throwIfExpired();
+      // A live upstream may reset or abort only the response body. It is a retryable transport
+      // failure while the shared Action deadline is still alive, not evidence that our deadline fired.
+      throw new ResponseBodyTransportError(error);
     }
     const { done, value } = result;
     if (done) break;
@@ -231,7 +232,17 @@ export class ImpactPlatformClient {
             status: response.status,
           });
         }
-        const raw = await readBoundedJson(response, MAX_REPORT_BYTES, this.options.deadline);
+        let raw: unknown;
+        try {
+          raw = await readBoundedJson(response, MAX_REPORT_BYTES, this.options.deadline);
+        } catch (error) {
+          if (!(error instanceof ResponseBodyTransportError)) throw error;
+          lastNetworkError = error.cause;
+          this.options.deadline.throwIfExpired();
+          if (attempt >= this.options.attempts) break;
+          await this.options.deadline.wait(backoff(attempt));
+          continue;
+        }
         this.options.deadline.throwIfExpired();
         const report = validateImpactReportForRequest(
           validateImpactReport(raw, this.options.projectId, this.options.checkId),
@@ -252,6 +263,13 @@ export class ImpactPlatformClient {
         rawError = await readBoundedJson(response, MAX_ERROR_BYTES, this.options.deadline);
       } catch (error) {
         if (error instanceof ImpactActionError && error.code === 'action_deadline_exceeded') throw error;
+        if (error instanceof ResponseBodyTransportError) {
+          lastNetworkError = error.cause;
+          this.options.deadline.throwIfExpired();
+          if (attempt >= this.options.attempts) break;
+          await this.options.deadline.wait(backoff(attempt));
+          continue;
+        }
         rawError = undefined;
       }
       const envelope = errorEnvelope(rawError);

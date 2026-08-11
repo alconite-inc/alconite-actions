@@ -9,6 +9,7 @@ import {
   isContained,
   sameFilesystemObject,
   sameIdentity,
+  samePath,
   sameReportDirectoryObject,
   stableIdentity,
   verifyAbsoluteDirectory,
@@ -21,6 +22,7 @@ import { markdownTable } from '../github';
 export type RiskThreshold = 'never' | 'low' | 'medium' | 'high' | 'critical';
 
 export interface ReportWriteHooks extends RootVerificationHooks {
+  afterDirectoryNameCreated?: (directory: string) => Promise<void>;
   afterDirectoryCreated?: (directory: string) => Promise<void>;
   afterFileCreated?: (filename: string) => Promise<void>;
 }
@@ -156,21 +158,30 @@ export async function writePrivateReport(
     });
     const directoryName = path.basename(createdDescriptorPath);
     const createdPath = path.join(root.path, directoryName);
-    await fs.chmod(createdDescriptorPath, 0o700);
     const descriptorStats = await fs.lstat(createdDescriptorPath, { bigint: true });
-    const ambientStats = await fs.lstat(createdPath, { bigint: true });
-    if (!descriptorStats.isDirectory() || descriptorStats.isSymbolicLink() ||
-        !ambientStats.isDirectory() || ambientStats.isSymbolicLink()) {
+    if (!descriptorStats.isDirectory() || descriptorStats.isSymbolicLink()) {
       throw new ImpactActionError('unsupported_secure_report_filesystem', 'The private Impact report directory is not a regular directory.');
     }
-    const childIdentity = fileIdentity(descriptorStats);
-    if (!sameReportDirectoryObject(childIdentity, fileIdentity(ambientStats))) {
+    const provisionalDirectory = {
+      path: createdDescriptorPath,
+      realPath: createdDescriptorPath,
+      identity: fileIdentity(descriptorStats),
+    };
+    await hooks.afterDirectoryNameCreated?.(createdPath);
+    directoryHandle = await openReportDirectory(provisionalDirectory, 'private report directory');
+    await directoryHandle.chmod(0o700);
+    const securedStats = await directoryHandle.stat({ bigint: true });
+    const childIdentity = fileIdentity(securedStats);
+    const descriptorRealPath = await fs.realpath(descriptorPath(directoryHandle));
+    const ambientStats = await fs.lstat(createdPath, { bigint: true });
+    const ambientRealPath = await fs.realpath(createdPath);
+    if (!ambientStats.isDirectory() || ambientStats.isSymbolicLink() ||
+        !sameReportDirectoryObject(childIdentity, fileIdentity(ambientStats)) ||
+        (Number(securedStats.mode) & 0o777) !== 0o700 || !samePath(descriptorRealPath, ambientRealPath)) {
       throw new ImpactActionError('unsupported_secure_report_filesystem', 'The private Impact report directory path changed during creation.');
     }
-    const directoryRealPath = await fs.realpath(createdPath);
-    directory = { path: createdPath, realPath: directoryRealPath, identity: childIdentity };
-    directoryHandle = await openReportDirectory(directory, 'private report directory');
-    if ((Number(descriptorStats.mode) & 0o777) !== 0o700 || !isContained(root.realPath, directory.realPath, false)) {
+    directory = { path: createdPath, realPath: descriptorRealPath, identity: childIdentity };
+    if (!isContained(root.realPath, directory.realPath, false)) {
       throw new ImpactActionError('unsupported_secure_report_filesystem', 'The private Impact report directory failed mode or containment verification.');
     }
     await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);

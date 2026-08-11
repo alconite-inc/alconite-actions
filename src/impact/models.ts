@@ -270,7 +270,8 @@ export class ImpactContractError extends Error {
   }
 }
 
-const HTTP_METHODS = new Set(['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE']);
+const HTTP_METHOD_VALUES = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'TRACE'] as const;
+const HTTP_METHODS = new Set<string>(HTTP_METHOD_VALUES);
 const CLASSIFICATION_VALUES = ['breaking', 'risky', 'non_breaking', 'informational'] as const;
 const CATEGORY_VALUES = [
   'operation', 'parameter', 'request_body', 'response', 'schema', 'security', 'server', 'media_type', 'metadata',
@@ -391,7 +392,7 @@ function validateClientCollection(value: unknown, context: string): void {
   if (validateSkipCounts(item.skipCounts, `${context}.skipCounts`) !== skipped) mismatch(`${context}.skipCounts is inconsistent`);
 }
 
-function validateSubject(value: unknown, kind: ContractChangeKind): ChangeSubject {
+function validateSubject(value: unknown, kind: ContractChangeKind, enforceV1Semantics: boolean): ChangeSubject {
   const item = record(value, 'change.subject', [
     'operation', 'schema', 'parameter', 'responseStatus', 'mediaType', 'enumValue', 'securityScheme', 'securityScope',
     'metadataPointer',
@@ -432,13 +433,38 @@ function validateSubject(value: unknown, kind: ContractChangeKind): ChangeSubjec
     if (item[key] !== null) present.add(key);
   }
   if (present.size === 0) mismatch('change.subject must contain at least one subject');
-  validateSubjectForKind(item, present, kind);
+  if (enforceV1Semantics) validateSubjectForKind(item, present, kind);
   return item as unknown as ChangeSubject;
 }
 
 function requireExactSubject(present: ReadonlySet<string>, required: readonly string[], kind: string): void {
   const requiredSet = new Set(required);
   if (present.size !== requiredSet.size || [...present].some((key) => !requiredSet.has(key))) {
+    mismatch(`change.subject does not match ${kind}`);
+  }
+}
+
+function requireSubjectWithOptional(
+  present: ReadonlySet<string>,
+  required: readonly string[],
+  optional: readonly string[],
+  kind: string,
+): void {
+  const requiredSet = new Set(required);
+  const allowed = new Set([...required, ...optional]);
+  if ([...requiredSet].some((key) => !present.has(key)) || [...present].some((key) => !allowed.has(key))) {
+    mismatch(`change.subject does not match ${kind}`);
+  }
+}
+
+function requireDirectionalSchema(
+  item: Record<string, unknown>,
+  requiredUse: 'REQUEST' | 'RESPONSE',
+  propertyRequired: boolean,
+  kind: ContractChangeKind,
+): void {
+  const schema = item.schema as { property: string | null; uses: Array<'REQUEST' | 'RESPONSE' | 'UNKNOWN'> };
+  if ((schema.property !== null) !== propertyRequired || !schema.uses.includes(requiredUse) || schema.uses.includes('UNKNOWN')) {
     mismatch(`change.subject does not match ${kind}`);
   }
 }
@@ -469,10 +495,16 @@ function validateSubjectForKind(item: Record<string, unknown>, present: Readonly
   if (kind === 'PARAMETER_ENUM_VALUE_ADDED' || kind === 'PARAMETER_ENUM_VALUE_REMOVED') {
     return requireExactSubject(present, ['operation', 'parameter', 'enumValue'], kind);
   }
-  if (requestSchemaKinds.has(kind)) return requireExactSubject(present, ['operation', 'schema'], kind);
+  if (requestSchemaKinds.has(kind)) {
+    requireExactSubject(present, ['operation', 'schema'], kind);
+    return requireDirectionalSchema(item, 'REQUEST', false, kind);
+  }
   if (requestMediaKinds.has(kind)) return requireExactSubject(present, ['operation', 'mediaType'], kind);
   if (responseKinds.has(kind)) return requireExactSubject(present, ['operation', 'responseStatus'], kind);
-  if (responseSchemaKinds.has(kind)) return requireExactSubject(present, ['operation', 'responseStatus', 'schema'], kind);
+  if (responseSchemaKinds.has(kind)) {
+    requireExactSubject(present, ['operation', 'responseStatus', 'schema'], kind);
+    return requireDirectionalSchema(item, 'RESPONSE', false, kind);
+  }
   if (responseMediaKinds.has(kind)) return requireExactSubject(present, ['operation', 'responseStatus', 'mediaType'], kind);
   if (schemaKinds.has(kind)) {
     requireExactSubject(present, ['schema'], kind);
@@ -482,13 +514,14 @@ function validateSubjectForKind(item: Record<string, unknown>, present: Readonly
   if (propertyKinds.has(kind)) {
     requireExactSubject(present, ['schema'], kind);
     if ((item.schema as { property: unknown }).property === null) mismatch(`${kind} requires a schema property`);
+    if (kind === 'REQUIRED_REQUEST_PROPERTY_ADDED') requireDirectionalSchema(item, 'REQUEST', true, kind);
     return;
   }
   if (kind === 'ENUM_VALUE_ADDED' || kind === 'ENUM_VALUE_REMOVED') {
     return requireExactSubject(present, ['schema', 'enumValue'], kind);
   }
   if (kind === 'SECURITY_REQUIREMENT_STRENGTHENED' || kind === 'SECURITY_REQUIREMENT_WEAKENED') {
-    return requireExactSubject(present, ['operation'], kind);
+    return requireSubjectWithOptional(present, ['operation'], ['securityScheme'], kind);
   }
   if (kind === 'SECURITY_SCOPE_ADDED' || kind === 'SECURITY_SCOPE_REMOVED') {
     return requireExactSubject(present, ['operation', 'securityScope'], kind);
@@ -594,6 +627,88 @@ function validateConfidenceBasis(
 }
 
 const DESTRUCTIVE_REMOVALS = new Set<ContractChangeKind>(['ENDPOINT_REMOVED', 'HTTP_METHOD_REMOVED', 'SCHEMA_REMOVED']);
+type V1PotentialRiskPolicy = Exclude<ImpactRisk, 'NONE' | 'CRITICAL'> |
+  'REQUIREMENT' | 'BREAKING_ADDITION' | 'PROPERTY_REQUIREMENT';
+const V1_POTENTIAL_RISK_POLICY: Record<ContractChangeKind, V1PotentialRiskPolicy> = {
+  ENDPOINT_ADDED: 'LOW',
+  ENDPOINT_REMOVED: 'HIGH',
+  HTTP_METHOD_ADDED: 'LOW',
+  HTTP_METHOD_REMOVED: 'HIGH',
+  PARAMETER_ADDED: 'LOW',
+  REQUIRED_PARAMETER_ADDED: 'HIGH',
+  PARAMETER_REMOVED: 'HIGH',
+  PARAMETER_TYPE_CHANGED: 'HIGH',
+  PARAMETER_REQUIREMENT_CHANGED: 'REQUIREMENT',
+  PARAMETER_CONSTRAINT_CHANGED: 'MEDIUM',
+  PARAMETER_ENUM_VALUE_ADDED: 'LOW',
+  PARAMETER_ENUM_VALUE_REMOVED: 'HIGH',
+  REQUEST_BODY_ADDED: 'BREAKING_ADDITION',
+  REQUIRED_REQUEST_BODY_ADDED: 'HIGH',
+  REQUEST_BODY_REMOVED: 'MEDIUM',
+  REQUEST_BODY_REQUIREMENT_CHANGED: 'REQUIREMENT',
+  REQUEST_SCHEMA_CHANGED: 'HIGH',
+  REQUEST_MEDIA_TYPE_ADDED: 'LOW',
+  REQUEST_MEDIA_TYPE_REMOVED: 'HIGH',
+  RESPONSE_ADDED: 'LOW',
+  RESPONSE_REMOVED: 'HIGH',
+  RESPONSE_SCHEMA_CHANGED: 'HIGH',
+  RESPONSE_MEDIA_TYPE_ADDED: 'LOW',
+  RESPONSE_MEDIA_TYPE_REMOVED: 'HIGH',
+  SCHEMA_ADDED: 'LOW',
+  SCHEMA_REMOVED: 'HIGH',
+  PROPERTY_ADDED: 'LOW',
+  PROPERTY_REMOVED: 'HIGH',
+  PROPERTY_TYPE_CHANGED: 'HIGH',
+  PROPERTY_REQUIREMENT_CHANGED: 'PROPERTY_REQUIREMENT',
+  PROPERTY_CONSTRAINT_CHANGED: 'MEDIUM',
+  REQUIRED_REQUEST_PROPERTY_ADDED: 'HIGH',
+  ENUM_VALUE_ADDED: 'LOW',
+  ENUM_VALUE_REMOVED: 'HIGH',
+  OPERATION_ID_CHANGED: 'MEDIUM',
+  DEPRECATION_CHANGED: 'LOW',
+  SECURITY_REQUIREMENT_STRENGTHENED: 'HIGH',
+  SECURITY_REQUIREMENT_WEAKENED: 'MEDIUM',
+  SECURITY_SCHEME_ADDED: 'LOW',
+  SECURITY_SCHEME_REMOVED: 'HIGH',
+  SECURITY_SCOPE_ADDED: 'BREAKING_ADDITION',
+  SECURITY_SCOPE_REMOVED: 'MEDIUM',
+  SERVER_ADDED: 'LOW',
+  SERVER_REMOVED: 'MEDIUM',
+  METADATA_CHANGED: 'LOW',
+  ANALYZER_REGRESSION: 'MEDIUM',
+  ANALYZER_RESOLUTION: 'LOW',
+};
+
+function expectedPotentialRiskV1(
+  kind: ContractChangeKind,
+  classification: ImpactChange['classification'],
+  subject: ChangeSubject,
+): ImpactRisk {
+  const policy = V1_POTENTIAL_RISK_POLICY[kind];
+  if (policy === 'REQUIREMENT') {
+    if (classification === 'breaking') return 'HIGH';
+    return classification === 'non_breaking' ? 'LOW' : 'MEDIUM';
+  }
+  if (policy === 'BREAKING_ADDITION') return classification === 'breaking' ? 'HIGH' : 'LOW';
+  if (policy === 'PROPERTY_REQUIREMENT') {
+    if (classification === 'breaking' && subject.schema?.uses.length === 1 && subject.schema.uses[0] === 'REQUEST') {
+      return 'HIGH';
+    }
+    return classification === 'non_breaking' ? 'LOW' : 'MEDIUM';
+  }
+  return policy;
+}
+
+function expectedDetectedRiskV1(
+  potentialRisk: ImpactRisk,
+  kind: ContractChangeKind,
+  affectedFiles: number,
+  highConfidenceFiles: number,
+): ImpactRisk {
+  if (affectedFiles === 0) return 'NONE';
+  return potentialRisk === 'HIGH' && DESTRUCTIVE_REMOVALS.has(kind) &&
+    affectedFiles >= 10 && highConfidenceFiles >= 5 ? 'CRITICAL' : potentialRisk;
+}
 
 function expectedCategory(kind: ContractChangeKind): (typeof CATEGORY_VALUES)[number] {
   switch (kind) {
@@ -647,7 +762,12 @@ function expectedCategory(kind: ContractChangeKind): (typeof CATEGORY_VALUES)[nu
   }
 }
 
-function validateChange(value: unknown, impactEngineVersion: number): ImpactChange {
+interface SemanticEngineVersions {
+  contractDelta: number;
+  impactAnalysis: number;
+}
+
+function validateChange(value: unknown, engines: SemanticEngineVersions): ImpactChange {
   const item = record(value, 'change', [
     'id', 'deltaFingerprint', 'kind', 'classification', 'category', 'ruleId', 'ruleVersion', 'summary', 'explanation',
     'baselineValue', 'candidateValue', 'subject', 'potentialRisk', 'risk', 'confidence', 'confidenceBasis',
@@ -657,16 +777,22 @@ function validateChange(value: unknown, impactEngineVersion: number): ImpactChan
   if (typeof item.deltaFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(item.deltaFingerprint)) mismatch('change.deltaFingerprint is invalid');
   if (item.id !== `cgdelta_${item.deltaFingerprint.slice(0, 32)}`) mismatch('change.id does not match its delta fingerprint');
   const kind = enumValue<ContractChangeKind>(item.kind, 'change.kind', CHANGE_KIND_SET);
-  enumValue(item.classification, 'change.classification', CLASSIFICATIONS);
+  const classification = enumValue<ImpactChange['classification']>(
+    item.classification,
+    'change.classification',
+    CLASSIFICATIONS,
+  );
   const category = enumValue<(typeof CATEGORY_VALUES)[number]>(item.category, 'change.category', CATEGORIES);
-  if (category !== expectedCategory(kind)) mismatch('change.category does not match its semantic kind');
+  if (engines.contractDelta === 1 && category !== expectedCategory(kind)) {
+    mismatch('change.category does not match its Contract Delta engine v1 semantic kind');
+  }
   byteString(item.ruleId, 'change.ruleId', 1, 64);
   integer(item.ruleVersion, 'change.ruleVersion', 1, U32_MAX);
   stringValue(item.summary, 'change.summary', 1, 200);
   stringValue(item.explanation, 'change.explanation', 1, 1_000);
   if (item.baselineValue !== null) stringValue(item.baselineValue, 'change.baselineValue', 0, 500);
   if (item.candidateValue !== null) stringValue(item.candidateValue, 'change.candidateValue', 0, 500);
-  validateSubject(item.subject, kind);
+  const subject = validateSubject(item.subject, kind, engines.contractDelta === 1);
   const potentialRisk = enumValue<ImpactRisk>(item.potentialRisk, 'change.potentialRisk', RISK_SET);
   const risk = enumValue<ImpactRisk>(item.risk, 'change.risk', RISK_SET);
   const confidence = item.confidence === null ? null : enumValue<ImpactConfidence>(item.confidence, 'change.confidence', CONFIDENCE_SET);
@@ -675,7 +801,7 @@ function validateChange(value: unknown, impactEngineVersion: number): ImpactChan
   const omitted = integer(item.omittedAffectedLocationCount, 'change.omittedAffectedLocationCount', 0, STANDARD_MAX_AFFECTED_LOCATIONS);
   const files = integer(item.affectedFileCount, 'change.affectedFileCount', 0, STANDARD_MAX_AFFECTED_FILES);
   const highFiles = integer(item.highConfidenceFileCount, 'change.highConfidenceFileCount', 0, STANDARD_MAX_AFFECTED_FILES);
-  validateConfidenceBasis(item.confidenceBasis, confidence, risk, files, highFiles, impactEngineVersion);
+  validateConfidenceBasis(item.confidenceBasis, confidence, risk, files, highFiles, engines.impactAnalysis);
   const sources = arrayValue(item.affectedSources, 'change.affectedSources', 200).map(validateAffectedSource);
   for (let index = 1; index < sources.length; index += 1) {
     const left = sources[index - 1];
@@ -708,10 +834,12 @@ function validateChange(value: unknown, impactEngineVersion: number): ImpactChan
       mismatch('change confidence is inconsistent with its complete affected-source counts');
     }
   }
-  if (total > 0 && impactEngineVersion === 1) {
-    const criticalElevation = risk === 'CRITICAL' && potentialRisk === 'HIGH' && DESTRUCTIVE_REMOVALS.has(kind);
-    if (risk === 'CRITICAL' && !criticalElevation) mismatch('change Critical risk is not a valid destructive-removal elevation');
-    if (risk !== potentialRisk && !criticalElevation) mismatch('change risk does not match its potential risk');
+  if (engines.impactAnalysis === 1) {
+    const expectedPotential = expectedPotentialRiskV1(kind, classification, subject);
+    const expectedRisk = expectedDetectedRiskV1(expectedPotential, kind, files, highFiles);
+    if (potentialRisk !== expectedPotential || risk !== expectedRisk) {
+      mismatch('change risk values disagree with Impact engine v1 policy');
+    }
   }
   const recommendation = record(item.recommendation, 'change.recommendation', ['code', 'message']);
   if (typeof recommendation.code !== 'string' || !/^[a-z][a-z0-9_]{0,99}$/u.test(recommendation.code)) {
@@ -737,7 +865,8 @@ function compareOptionalObject<T>(left: T | null, right: T | null, compare: (a: 
 
 function compareSubject(left: ChangeSubject, right: ChangeSubject): number {
   const operation = compareOptionalObject(left.operation, right.operation, (a, b) =>
-    compareUtf8(a.path, b.path) || compareUtf8(a.method, b.method) ||
+    compareUtf8(a.path, b.path) || HTTP_METHOD_VALUES.indexOf(a.method as (typeof HTTP_METHOD_VALUES)[number]) -
+      HTTP_METHOD_VALUES.indexOf(b.method as (typeof HTTP_METHOD_VALUES)[number]) ||
     compareOptionalString(a.baselineOperationId, b.baselineOperationId) ||
     compareOptionalString(a.candidateOperationId, b.candidateOperationId));
   if (operation !== 0) return operation;
@@ -756,9 +885,8 @@ function compareSubject(left: ChangeSubject, right: ChangeSubject): number {
     return a.uses.length - b.uses.length;
   });
   if (schema !== 0) return schema;
-  const locations = ['PATH', 'QUERY', 'HEADER', 'COOKIE'] as const;
   const parameter = compareOptionalObject(left.parameter, right.parameter, (a, b) =>
-    compareUtf8(a.name, b.name) || locations.indexOf(a.location) - locations.indexOf(b.location));
+    compareUtf8(a.name, b.name) || compareUtf8(a.location, b.location));
   if (parameter !== 0) return parameter;
   return compareOptionalString(left.responseStatus, right.responseStatus) ||
     compareOptionalString(left.mediaType, right.mediaType) ||
@@ -845,7 +973,7 @@ function validateContract(value: unknown, expectedProjectId: string, expectedChe
   }
 }
 
-function validateEngines(value: unknown): number {
+function validateEngines(value: unknown): SemanticEngineVersions {
   const item = record(value, 'engines', [
     'analyzerVersion', 'analyzerRuleSetVersion', 'analyzerCompatibilityVersion', 'legacyComparisonEngineVersion',
     'contractDeltaEngineVersion', 'impactAnalysisEngineVersion',
@@ -855,7 +983,10 @@ function validateEngines(value: unknown): number {
     'analyzerRuleSetVersion', 'analyzerCompatibilityVersion', 'legacyComparisonEngineVersion',
     'contractDeltaEngineVersion', 'impactAnalysisEngineVersion',
   ]) integer(item[key], `engines.${key}`, 1, U32_MAX);
-  return item.impactAnalysisEngineVersion as number;
+  return {
+    contractDelta: item.contractDeltaEngineVersion as number,
+    impactAnalysis: item.impactAnalysisEngineVersion as number,
+  };
 }
 
 export function validateImpactReport(value: unknown, expectedProjectId: string, expectedCheckId: string): ImpactReport {
@@ -868,7 +999,7 @@ export function validateImpactReport(value: unknown, expectedProjectId: string, 
     mismatch('analysisFingerprint is invalid');
   }
   validateContract(item.contract, expectedProjectId, expectedCheckId);
-  const impactEngineVersion = validateEngines(item.engines);
+  const engines = validateEngines(item.engines);
   const overallRisk = enumValue<ImpactRisk>(item.overallRisk, 'overallRisk', RISK_SET);
   const overallPotentialRisk = enumValue<ImpactRisk>(item.overallPotentialRisk, 'overallPotentialRisk', RISK_SET);
   const breaking = integer(item.breakingChanges, 'breakingChanges', 0, 1_000);
@@ -879,15 +1010,17 @@ export function validateImpactReport(value: unknown, expectedProjectId: string, 
     0,
     STANDARD_MAX_AFFECTED_LOCATIONS,
   );
-  const changes = arrayValue(item.changes, 'changes', 1_000).map((change) => validateChange(change, impactEngineVersion));
+  const changes = arrayValue(item.changes, 'changes', 1_000).map((change) => validateChange(change, engines));
   if (new Set(changes.map((change) => change.id)).size !== changes.length ||
       new Set(changes.map((change) => change.deltaFingerprint)).size !== changes.length) {
     mismatch('changes must have unique identities');
   }
-  for (let index = 1; index < changes.length; index += 1) {
-    const left = changes[index - 1];
-    const right = changes[index];
-    if (!left || !right || compareChanges(left, right) >= 0) mismatch('changes must use canonical Contract Delta ordering');
+  if (engines.contractDelta === 1) {
+    for (let index = 1; index < changes.length; index += 1) {
+      const left = changes[index - 1];
+      const right = changes[index];
+      if (!left || !right || compareChanges(left, right) >= 0) mismatch('changes must use canonical Contract Delta ordering');
+    }
   }
   if (changes.filter((change) => change.classification === 'breaking').length !== breaking) mismatch('breakingChanges is inconsistent');
   const completeLocations = changes.reduce((total, change) => total + change.affectedLocationCount, 0);

@@ -160,6 +160,55 @@ test('fails closed without report bytes when the whole private child directory i
   assert.equal((await fs.readFile(path.join(displaced, 'impact-report.json'))).byteLength, 0);
 });
 
+test('never follows a pre-bind private-directory swap when enforcing report modes', {
+  skip: process.platform !== 'linux',
+}, async () => {
+  const { base, workspace, runner } = await roots();
+  const target = path.join(base, 'chmod-target');
+  await fs.mkdir(target, { mode: 0o755 });
+  let displaced = '';
+  await assert.rejects(
+    writePrivateReport(await fixture(), runner, workspace, new ActionDeadline(30_000), {
+      afterDirectoryNameCreated: async (directory) => {
+        displaced = `${directory}-original`;
+        await fs.rename(directory, displaced);
+        await fs.symlink(target, directory, 'dir');
+      },
+    }),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'unsupported_secure_report_filesystem',
+  );
+  assert.ok(displaced);
+  assert.equal((await fs.stat(target)).mode & 0o777, 0o755);
+  assert.equal((await fs.stat(displaced)).mode & 0o777, 0o700);
+  assert.deepEqual(await fs.readdir(target), []);
+});
+
+test('never chmods a replacement directory swapped in before descriptor binding', {
+  skip: process.platform !== 'linux',
+}, async () => {
+  const { base, workspace, runner } = await roots();
+  const target = path.join(base, 'regular-chmod-target');
+  await fs.mkdir(target, { mode: 0o755 });
+  await fs.writeFile(path.join(target, 'sentinel'), 'unchanged', { mode: 0o644 });
+  let displaced = '';
+  let replacementPath = '';
+  await assert.rejects(
+    writePrivateReport(await fixture(), runner, workspace, new ActionDeadline(30_000), {
+      afterDirectoryNameCreated: async (directory) => {
+        displaced = `${directory}-original`;
+        replacementPath = directory;
+        await fs.rename(directory, displaced);
+        await fs.rename(target, directory);
+      },
+    }),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'unsupported_secure_report_filesystem',
+  );
+  assert.ok(displaced);
+  assert.equal((await fs.stat(displaced)).mode & 0o777, 0o700);
+  assert.equal((await fs.stat(replacementPath)).mode & 0o777, 0o755);
+  assert.equal(await fs.readFile(path.join(replacementPath, 'sentinel'), 'utf8'), 'unchanged');
+});
+
 test('fails closed when the exclusive destination name or path identity is raced', async () => {
   const { workspace, runner } = await roots();
   const report = await fixture();

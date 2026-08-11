@@ -69,7 +69,7 @@ export function assertSupportedActionPlatform(platform: NodeJS.Platform = proces
   }
 }
 
-function samePath(left: string, right: string): boolean {
+export function samePath(left: string, right: string): boolean {
   const normalize = (value: string): string => process.platform === 'win32' ? value.toLowerCase() : value;
   return normalize(path.normalize(left)) === normalize(path.normalize(right));
 }
