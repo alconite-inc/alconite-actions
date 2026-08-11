@@ -42,7 +42,7 @@ test('GitHub summary escapes Markdown and HTML-sensitive platform values', () =>
       provider: 'github-actions', repository: null, commitSha: null, ref: null, workflow: null,
       workflowRunId: null, workflowRunAttempt: null, releaseIdentifier: null
     },
-    runner: { name: 'runner', version: '2.1.1', operatingSystem: 'linux', architecture: 'x64' },
+    runner: { name: 'runner', version: '2.2.0', operatingSystem: 'linux', architecture: 'x64' },
     summary: {
       configuredOperations: 1, executedOperations: 1, passedOperations: 0, failedOperations: 1, warningOperations: 0,
       informationalFindings: 0, totalDurationMilliseconds: 1

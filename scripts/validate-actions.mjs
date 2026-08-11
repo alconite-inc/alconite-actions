@@ -125,8 +125,8 @@ for (const filename of workflowFiles) {
       const normalized = uses.replace(/\s+#.*$/u, '');
       const selfVersion = selfRelease.exec(normalized)?.[1];
       assert.ok(
-        immutableAction.test(normalized) || selfVersion === 'v2.0.0' || selfVersion === currentSelfRelease,
-        `${filename} job ${jobName} must use an immutable SHA, the frozen v2.0.0 self release, or the current ${currentSelfRelease} self release`,
+        immutableAction.test(normalized) || selfVersion === currentSelfRelease,
+        `${filename} job ${jobName} must use an immutable SHA or the current ${currentSelfRelease} self release`,
       );
     }
   }

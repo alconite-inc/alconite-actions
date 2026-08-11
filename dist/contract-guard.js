@@ -20,6 +20,7 @@ exports.canonicalReportUrl = canonicalReportUrl;
 const node_crypto_1 = require("node:crypto");
 const node_fs_1 = require("node:fs");
 const node_path_1 = __importDefault(require("node:path"));
+const release_1 = require("./release");
 exports.MAX_CANDIDATE_BYTES = 9_437_184;
 exports.MAX_REPORT_BYTES = 33_554_432;
 exports.REPORT_SCHEMA_VERSION = 'alconite.contract-guard.report.v1';
@@ -285,7 +286,7 @@ async function runCheck(request, dependencies = {
                     accept: 'application/json',
                     authorization: `Bearer ${request.projectToken}`,
                     'idempotency-key': request.idempotencyKey,
-                    'user-agent': 'alconite-contract-guard-action/2.1.1',
+                    'user-agent': release_1.CONTRACT_GUARD_USER_AGENT,
                 },
                 body,
                 redirect: 'manual',

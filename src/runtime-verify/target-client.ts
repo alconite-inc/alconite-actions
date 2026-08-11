@@ -1,4 +1,5 @@
 import type { RuntimeDefaults } from './configuration';
+import { RUNTIME_VERIFY_USER_AGENT } from '../release';
 import type { RuntimeFinding } from './findings';
 import { finding } from './findings';
 import type { ApprovedContract } from './openapi';
@@ -56,7 +57,7 @@ async function executeOperation(
     for (let redirect = 0; redirect <= 3; redirect += 1) {
       response = await fetch(current, {
         method: plan.method,
-        headers: { ...plan.headers, 'User-Agent': 'alconite-runtime-verify-action/2.1.1', Accept: 'application/json, application/problem+json, */*;q=0.1' },
+        headers: { ...plan.headers, 'User-Agent': RUNTIME_VERIFY_USER_AGENT, Accept: 'application/json, application/problem+json, */*;q=0.1' },
         redirect: 'manual', signal: controller.signal
       });
       if (!REDIRECT_STATUSES.has(response.status)) break;

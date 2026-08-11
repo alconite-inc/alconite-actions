@@ -29,7 +29,8 @@ async function server(t: TestContext, handler: (request: IncomingMessage, respon
 }
 
 test('executes a passing JSON response entirely in the runner', async t => {
-  const baseUrl = await server(t, (_request, reply) => {
+  const baseUrl = await server(t, (request, reply) => {
+    assert.equal(request.headers['user-agent'], 'alconite-runtime-verify-action/2.2.0');
     reply.writeHead(200, { 'content-type': 'application/json' }); reply.end('{"status":"healthy"}');
   });
   const result = await executePlan(contract, [plan()], baseUrl, defaults);

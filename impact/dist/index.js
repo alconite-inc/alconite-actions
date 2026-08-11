@@ -1668,6 +1668,12 @@ function validateImpactReportForRequest(report, request) {
   return report;
 }
 
+// src/release.ts
+var ACTION_RELEASE_VERSION = "2.2.0";
+var CONTRACT_GUARD_USER_AGENT = `alconite-contract-guard-action/${ACTION_RELEASE_VERSION}`;
+var IMPACT_USER_AGENT = `alconite-impact-action/${ACTION_RELEASE_VERSION}`;
+var RUNTIME_VERIFY_USER_AGENT = `alconite-runtime-verify-action/${ACTION_RELEASE_VERSION}`;
+
 // src/impact/platform-client.ts
 var MAX_REQUEST_BYTES = 24 * 1024 * 1024;
 var MAX_ERROR_BYTES = 64 * 1024;
@@ -1825,7 +1831,7 @@ var ImpactPlatformClient = class {
             accept: "application/json",
             authorization: `Bearer ${this.options.projectToken}`,
             "content-type": "application/json",
-            "user-agent": "alconite-impact-action/2.1.2-unreleased"
+            "user-agent": IMPACT_USER_AGENT
           },
           body,
           redirect: "manual",

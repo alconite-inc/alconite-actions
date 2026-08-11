@@ -26619,6 +26619,16 @@ function writeJobSummary(markdown) {
   if (summaryFile) (0, import_node_fs.appendFileSync)(summaryFile, markdown, { encoding: "utf8" });
 }
 
+// src/release.ts
+var ACTION_RELEASE_VERSION = "2.2.0";
+var CONTRACT_GUARD_USER_AGENT = `alconite-contract-guard-action/${ACTION_RELEASE_VERSION}`;
+var IMPACT_USER_AGENT = `alconite-impact-action/${ACTION_RELEASE_VERSION}`;
+var RUNTIME_VERIFY_USER_AGENT = `alconite-runtime-verify-action/${ACTION_RELEASE_VERSION}`;
+var RUNTIME_VERIFY_RUNNER = {
+  name: "alconite-runtime-verify-action",
+  version: ACTION_RELEASE_VERSION
+};
+
 // src/contract-guard.ts
 var ContractGuardError = class extends Error {
   status;
@@ -27350,7 +27360,7 @@ var RuntimeVerifyPlatformClient = class {
             Authorization: `Bearer ${this.options.projectToken}`,
             "Content-Type": "application/json",
             Accept: "application/json",
-            "User-Agent": "alconite-runtime-verify-action/2.1.1",
+            "User-Agent": RUNTIME_VERIFY_USER_AGENT,
             ...idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}
           },
           body: JSON.stringify(body)
@@ -27410,8 +27420,8 @@ function createInitiationRequest(inputs, contractContentHash, configurationConte
       ...inputs.deploymentId ? { releaseIdentifier: inputs.deploymentId } : {}
     },
     runner: {
-      name: "alconite-runtime-verify-action",
-      version: "2.1.1",
+      name: RUNTIME_VERIFY_RUNNER.name,
+      version: RUNTIME_VERIFY_RUNNER.version,
       operatingSystem: bounded(environment.RUNNER_OS ?? process.platform, 80),
       architecture: bounded(environment.RUNNER_ARCH ?? process.arch, 80)
     }
@@ -27961,7 +27971,7 @@ async function executeOperation(contract, plan, baseUrl, defaults, totalSignal) 
     for (let redirect = 0; redirect <= 3; redirect += 1) {
       response = await fetch(current, {
         method: plan.method,
-        headers: { ...plan.headers, "User-Agent": "alconite-runtime-verify-action/2.1.1", Accept: "application/json, application/problem+json, */*;q=0.1" },
+        headers: { ...plan.headers, "User-Agent": RUNTIME_VERIFY_USER_AGENT, Accept: "application/json, application/problem+json, */*;q=0.1" },
         redirect: "manual",
         signal: controller.signal
       });

@@ -38,6 +38,17 @@ jobs:
             echo "::error::Tag $RELEASE_TAG does not match package version $package_version"
             exit 1
           fi
+      - name: Validate immutable tag target
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
+          if [[ "$GITHUB_SHA" != "$tag_commit" ]]; then
+            echo "::error::Workflow commit $GITHUB_SHA does not match tag target $tag_commit"
+            exit 1
+          fi
       - run: npm ci
       - run: npm run verify
       - name: Require reproducible checked-in build
@@ -51,7 +62,7 @@ jobs:
         with:
           subject-path: runtime-verify/dist/**
       - name: Attest Impact JavaScript build
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: impact/dist/**
       - name: Create GitHub release

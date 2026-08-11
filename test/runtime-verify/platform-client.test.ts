@@ -14,7 +14,7 @@ const request: InitiationRequest = {
   configurationContentHash: hash, displayName: 'Runtime verification', deployment: {
     provider: 'github-actions', repository: 'owner/repo', commitSha: 'abc', ref: 'refs/heads/main', workflow: 'CI',
     workflowRunId: '1', workflowRunAttempt: 1
-  }, runner: { name: 'alconite-runtime-verify-action', version: '2.1.1', operatingSystem: 'Linux', architecture: 'X64' }
+  }, runner: { name: 'alconite-runtime-verify-action', version: '2.2.0', operatingSystem: 'Linux', architecture: 'X64' }
 };
 const report: RuntimeVerifyReport = {
   schema: 'alconite.runtime-verify.report.v1', runId, projectId, environmentId, contractGuardCheckId: checkId,
@@ -27,7 +27,7 @@ const report: RuntimeVerifyReport = {
     provider: 'github-actions', repository: 'owner/repo', commitSha: 'abc', ref: 'refs/heads/main', workflow: 'CI',
     workflowRunId: '1', workflowRunAttempt: 1, releaseIdentifier: null
   },
-  runner: { name: 'alconite-runtime-verify-action', version: '2.1.1', operatingSystem: 'Linux', architecture: 'X64' },
+  runner: { name: 'alconite-runtime-verify-action', version: '2.2.0', operatingSystem: 'Linux', architecture: 'X64' },
   summary: {
     configuredOperations: 0, executedOperations: 0, passedOperations: 0, failedOperations: 0, warningOperations: 0,
     informationalFindings: 0, totalDurationMilliseconds: 0
@@ -80,6 +80,7 @@ test('initiates with bearer auth, idempotency, required display name, and no tar
   const apiUrl = await mockServer(t, (incoming, reply, body) => {
     assert.equal(incoming.headers.authorization, 'Bearer alc_cg_secret');
     assert.equal(incoming.headers['idempotency-key'], 'runtime-gh-v1-test');
+    assert.equal(incoming.headers['user-agent'], 'alconite-runtime-verify-action/2.2.0');
     assert.equal(body.displayName, 'Runtime verification');
     assert.equal(JSON.stringify(body).includes('baseUrl'), false);
     json(reply, 200, pending());
