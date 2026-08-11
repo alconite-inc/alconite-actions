@@ -3,6 +3,7 @@ import path from 'node:path';
 import ignore, { type Ignore } from 'ignore';
 import { ActionDeadline } from './deadline';
 import { ImpactActionError } from './errors';
+import { hasPortableRelativePathSyntax } from './portable-path';
 import {
   CLIENT_COLLECTION_SCHEMA_VERSION,
   SKIP_CODES,
@@ -91,20 +92,18 @@ function complexity(message: string): never {
 }
 
 export function validatePortableRoot(value: string): string {
-  const candidate = value.trim() || '.';
-  if (Buffer.byteLength(candidate, 'utf8') > 512 || candidate.includes('\0') || candidate.includes('\\') || candidate.startsWith('/') || /^[A-Za-z]:/u.test(candidate)) {
+  const candidate = value.trim() === '' ? '.' : value;
+  if (Buffer.byteLength(candidate, 'utf8') > 512) {
     invalid('source-root must be a portable path relative to GITHUB_WORKSPACE');
   }
   if (candidate === '.') return candidate;
-  const components = candidate.split('/');
-  if (components.some((component) => !component || component === '.' || component === '..')) {
+  if (!hasPortableRelativePathSyntax(candidate)) {
     invalid('source-root must contain only normalized path components below GITHUB_WORKSPACE');
   }
-  return components.join('/');
+  return candidate;
 }
 
 export function validateAdditionalIgnorePatterns(patterns: string[]): string[] {
-  if (patterns.length > 20) invalid('additional-ignore accepts at most 20 non-empty patterns');
   const result: string[] = [];
   for (const original of patterns) {
     const pattern = original.trim();
@@ -345,6 +344,9 @@ export async function collectSourceManifest(options: SourceCollectionOptions): P
       const absolute = path.join(directory, entry.name);
       const relativeWorkspace = portable(workspace.path, absolute);
       const relativeSource = portable(root.path, absolute);
+      if (!hasPortableRelativePathSyntax(relativeWorkspace) || !hasPortableRelativePathSyntax(relativeSource)) {
+        invalid('The selected workspace contains a path that cannot be represented safely in an Impact manifest.');
+      }
       const depth = pathDepth(root.path, absolute);
       const pathTooLong = Buffer.byteLength(relativeWorkspace, 'utf8') > limits.maximumPathBytes;
       const stats = await inspectEntry(absolute).catch((error: unknown) => {

@@ -1,4 +1,5 @@
 import { constants, promises as fs, type BigIntStats } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { ActionDeadline } from './deadline';
 import { ImpactActionError } from './errors';
@@ -8,6 +9,7 @@ import {
   isContained,
   sameFilesystemObject,
   sameIdentity,
+  sameReportDirectoryObject,
   stableIdentity,
   verifyAbsoluteDirectory,
   type StableIdentity,
@@ -41,25 +43,107 @@ function fileIdentity(stats: BigIntStats): StableIdentity {
 
 async function safeFailureCleanup(
   root: VerifiedDirectory,
+  rootHandle: FileHandle | undefined,
   directory: VerifiedDirectory | undefined,
-  filename: string | undefined,
+  directoryHandle: FileHandle | undefined,
+  directoryName: string | undefined,
+  anchoredFilename: string | undefined,
   identity: StableIdentity | undefined,
 ): Promise<void> {
-  try {
-    await assertDirectoryIdentity(root, 'report');
-    if (filename && identity) {
-      const stats = await fs.lstat(filename, { bigint: true });
-      if (stats.isFile() && !stats.isSymbolicLink() && stats.nlink === 1n && sameIdentity(identity, fileIdentity(stats))) {
-        await fs.unlink(filename);
+  if (directoryHandle && anchoredFilename && identity) {
+    try {
+      const stats = await fs.lstat(anchoredFilename, { bigint: true });
+      // A failed/partial write legitimately changes ctime; the anchored name may be removed only
+      // when it still names the exact Action-created regular inode with its original link count.
+      if (stats.isFile() && !stats.isSymbolicLink() && stats.nlink === 1n &&
+          sameFilesystemObject(identity, fileIdentity(stats))) {
+        await fs.unlink(anchoredFilename);
       }
+    } catch {
+      // An identity mismatch must never broaden cleanup to another name or path.
     }
-    if (directory) {
-      await assertDirectoryIdentity(directory, 'report');
-      if ((await fs.readdir(directory.path)).length === 0) await fs.rmdir(directory.path);
-    }
-  } catch {
-    // Never broaden cleanup after an identity failure. The runner will remove RUNNER_TEMP.
   }
+  if (rootHandle && directory && directoryHandle && directoryName) {
+    try {
+      await assertReportDirectoryHandle(rootHandle, root.identity, 'runner temporary root');
+      await assertDirectoryIdentity(root, 'report');
+      await assertReportDirectoryHandle(directoryHandle, directory.identity, 'private report directory');
+      const anchoredDirectory = descriptorChild(rootHandle, directoryName);
+      const pathStats = await fs.lstat(anchoredDirectory, { bigint: true });
+      if (!pathStats.isDirectory() || pathStats.isSymbolicLink() ||
+          !sameReportDirectoryObject(directory.identity, fileIdentity(pathStats))) return;
+      if ((await fs.readdir(descriptorPath(directoryHandle))).length !== 0) return;
+      await assertDirectoryIdentity(directory, 'report');
+      await fs.rmdir(anchoredDirectory);
+    } catch {
+      // The runner will remove RUNNER_TEMP; never recursively clean an unresolved directory.
+    }
+  }
+}
+
+function reportDirectoryFlags(): number {
+  if (process.platform !== 'linux' || typeof constants.O_NOFOLLOW !== 'number' || typeof constants.O_DIRECTORY !== 'number') {
+    throw new ImpactActionError(
+      'unsupported_secure_report_filesystem',
+      'Secure Impact report creation requires Linux descriptor-relative no-follow filesystem support.',
+    );
+  }
+  return constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY;
+}
+
+function descriptorPath(handle: FileHandle): string {
+  return `/proc/self/fd/${handle.fd}`;
+}
+
+function descriptorChild(handle: FileHandle, child: string): string {
+  return `${descriptorPath(handle)}/${child}`;
+}
+
+async function assertReportDirectoryHandle(handle: FileHandle, identity: StableIdentity, label: string): Promise<void> {
+  const stats = await handle.stat({ bigint: true });
+  if (!stats.isDirectory() || !sameReportDirectoryObject(identity, fileIdentity(stats))) {
+    throw new ImpactActionError('unsupported_secure_report_filesystem', `The verified ${label} changed during report creation.`);
+  }
+}
+
+async function openReportDirectory(directory: VerifiedDirectory, label: string): Promise<FileHandle> {
+  let handle: FileHandle;
+  try {
+    handle = await fs.open(directory.path, reportDirectoryFlags());
+  } catch (error) {
+    throw new ImpactActionError(
+      'unsupported_secure_report_filesystem',
+      `The ${label} could not be opened with descriptor-relative no-follow semantics.`,
+      { cause: error },
+    );
+  }
+  try {
+    await assertReportDirectoryHandle(handle, directory.identity, label);
+    const throughDescriptor = await fs.stat(descriptorPath(handle), { bigint: true });
+    if (!throughDescriptor.isDirectory() ||
+        !sameReportDirectoryObject(directory.identity, fileIdentity(throughDescriptor))) {
+      throw new ImpactActionError(
+        'unsupported_secure_report_filesystem',
+        `The ${label} cannot be addressed safely through /proc/self/fd.`,
+      );
+    }
+    return handle;
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function assertBoundReportDirectory(
+  root: VerifiedDirectory,
+  rootHandle: FileHandle,
+  directory: VerifiedDirectory,
+  directoryHandle: FileHandle,
+): Promise<void> {
+  await assertReportDirectoryHandle(rootHandle, root.identity, 'runner temporary root');
+  await assertDirectoryIdentity(root, 'report');
+  await assertReportDirectoryHandle(directoryHandle, directory.identity, 'private report directory');
+  await assertDirectoryIdentity(directory, 'report');
 }
 
 /** Persist a creation-only canonical report below a verified runner-owned temporary directory. */
@@ -71,14 +155,7 @@ export async function writePrivateReport(
   hooks: ReportWriteHooks = {},
 ): Promise<string> {
   deadline.throwIfExpired();
-  // Node 24 does not expose Windows reparse attributes or portable ACL/mode verification. The
-  // approved plan requires fail-closed behavior rather than silently weakening this boundary.
-  if (process.platform === 'win32') {
-    throw new ImpactActionError(
-      'unsupported_secure_report_filesystem',
-      'Secure Impact report creation is unavailable on this Windows Node filesystem; use a supported Linux runner.',
-    );
-  }
+  reportDirectoryFlags();
   const workspace = await verifyAbsoluteDirectory(workspacePath, 'source', deadline);
   const root = await verifyAbsoluteDirectory(runnerTemp, 'report', deadline);
   if (isContained(workspace.realPath, root.realPath)) {
@@ -88,25 +165,48 @@ export async function writePrivateReport(
   const bytes = Buffer.from(`${JSON.stringify(report)}\n`, 'utf8');
   deadline.throwIfExpired();
   let directory: VerifiedDirectory | undefined;
+  let directoryName: string | undefined;
   let filename: string | undefined;
+  let anchoredFilename: string | undefined;
   let createdIdentity: StableIdentity | undefined;
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let rootHandle: FileHandle | undefined;
+  let directoryHandle: FileHandle | undefined;
   try {
-    const createdPath = await fs.mkdtemp(path.join(root.path, 'alconite-impact-'));
-    await fs.chmod(createdPath, 0o700);
-    directory = await verifyAbsoluteDirectory(createdPath, 'report', deadline);
-    const directoryStats = await fs.lstat(directory.path, { bigint: true });
-    if ((Number(directoryStats.mode) & 0o777) !== 0o700 || !isContained(root.realPath, directory.realPath, false)) {
+    rootHandle = await openReportDirectory(root, 'runner temporary root');
+    const createdDescriptorPath = await fs.mkdtemp(descriptorChild(rootHandle, 'alconite-impact-')).catch((error: unknown) => {
+      throw new ImpactActionError(
+        'unsupported_secure_report_filesystem',
+        'The runner does not support descriptor-anchored private directory creation through /proc/self/fd.',
+        { cause: error },
+      );
+    });
+    directoryName = path.basename(createdDescriptorPath);
+    const createdPath = path.join(root.path, directoryName);
+    await fs.chmod(createdDescriptorPath, 0o700);
+    const descriptorStats = await fs.lstat(createdDescriptorPath, { bigint: true });
+    const ambientStats = await fs.lstat(createdPath, { bigint: true });
+    if (!descriptorStats.isDirectory() || descriptorStats.isSymbolicLink() ||
+        !ambientStats.isDirectory() || ambientStats.isSymbolicLink()) {
+      throw new ImpactActionError('unsupported_secure_report_filesystem', 'The private Impact report directory is not a regular directory.');
+    }
+    const childIdentity = fileIdentity(descriptorStats);
+    if (!sameReportDirectoryObject(childIdentity, fileIdentity(ambientStats))) {
+      throw new ImpactActionError('unsupported_secure_report_filesystem', 'The private Impact report directory path changed during creation.');
+    }
+    const directoryRealPath = await fs.realpath(createdPath);
+    directory = { path: createdPath, realPath: directoryRealPath, identity: childIdentity };
+    directoryHandle = await openReportDirectory(directory, 'private report directory');
+    if ((Number(descriptorStats.mode) & 0o777) !== 0o700 || !isContained(root.realPath, directory.realPath, false)) {
       throw new ImpactActionError('unsupported_secure_report_filesystem', 'The private Impact report directory failed mode or containment verification.');
     }
-    await assertDirectoryIdentity(root, 'report');
+    await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);
     await hooks.afterDirectoryCreated?.(directory.path);
+    await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);
     filename = path.join(directory.path, 'impact-report.json');
-    if (typeof constants.O_NOFOLLOW !== 'number') {
-      throw new ImpactActionError('unsupported_secure_report_filesystem', 'The runner does not expose O_NOFOLLOW for private report creation.');
-    }
+    anchoredFilename = descriptorChild(directoryHandle, 'impact-report.json');
     handle = await fs.open(
-      filename,
+      anchoredFilename,
       constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY,
       0o600,
     );
@@ -117,6 +217,12 @@ export async function writePrivateReport(
       throw new ImpactActionError('unsupported_secure_report_filesystem', 'The private Impact report file mode could not be enforced.');
     }
     await hooks.afterFileCreated?.(filename);
+    await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);
+    const anchoredBeforeWrite = await fs.lstat(anchoredFilename, { bigint: true });
+    if (!anchoredBeforeWrite.isFile() || anchoredBeforeWrite.isSymbolicLink() || anchoredBeforeWrite.nlink !== 1n ||
+        !sameIdentity(createdIdentity, fileIdentity(anchoredBeforeWrite))) {
+      throw new ImpactActionError('report_write_failed', 'The private Impact report path changed before it was written.');
+    }
     await handle.writeFile(bytes);
     await handle.sync();
     deadline.throwIfExpired();
@@ -128,22 +234,27 @@ export async function writePrivateReport(
     createdIdentity = afterWriteIdentity;
     await handle.close();
     handle = undefined;
+    const anchoredStats = await fs.lstat(anchoredFilename, { bigint: true });
     const pathStats = await fs.lstat(filename, { bigint: true });
     const finalPath = await fs.realpath(filename);
     if (
+      !anchoredStats.isFile() || anchoredStats.isSymbolicLink() || anchoredStats.nlink !== 1n ||
+      !sameIdentity(createdIdentity, fileIdentity(anchoredStats)) ||
       !pathStats.isFile() || pathStats.isSymbolicLink() || pathStats.nlink !== 1n || !sameIdentity(createdIdentity, fileIdentity(pathStats)) ||
       !isContained(directory.realPath, finalPath, false)
     ) {
       throw new ImpactActionError('report_write_failed', 'The private Impact report failed final identity verification.');
     }
-    await assertDirectoryIdentity(directory, 'report');
-    await assertDirectoryIdentity(root, 'report');
+    await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);
     return filename;
   } catch (error) {
     await handle?.close().catch(() => undefined);
-    await safeFailureCleanup(root, directory, filename, createdIdentity);
+    await safeFailureCleanup(root, rootHandle, directory, directoryHandle, directoryName, anchoredFilename, createdIdentity);
     if (error instanceof ImpactActionError) throw error;
     throw new ImpactActionError('report_write_failed', 'The private Impact report could not be created securely.', { cause: error });
+  } finally {
+    await directoryHandle?.close().catch(() => undefined);
+    await rootHandle?.close().catch(() => undefined);
   }
 }
 

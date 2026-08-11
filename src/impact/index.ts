@@ -16,6 +16,7 @@ import {
   validateProjectToken,
 } from './platform-client';
 import { impactSummary, parseRiskThreshold, shouldFailRisk, writePrivateReport } from './report';
+import { assertSupportedActionPlatform } from './secure-filesystem';
 import { collectSourceManifest, validateAdditionalIgnorePatterns, validatePortableRoot } from './source-manifest';
 
 function boundedInteger(value: string, name: string, minimum: number, maximum: number): number {
@@ -74,6 +75,8 @@ async function main(): Promise<void> {
   // Read the timeout first so one monotonic deadline begins before any workspace filesystem access.
   const timeoutMs = boundedInteger(github.getInput('timeout-seconds'), 'timeout-seconds', 1, 600) * 1_000;
   const deadline = new ActionDeadline(timeoutMs);
+  // Fail before inspecting the checkout or sending source when Node cannot prove no-follow identity.
+  assertSupportedActionPlatform();
   const rawToken = github.getInput('project-token', { required: true });
   github.setSecret(rawToken);
   const projectToken = validateProjectToken(rawToken);

@@ -46,6 +46,20 @@ function request(): ImpactRequest {
   };
 }
 
+async function responseFixture(input: ImpactRequest = request()): Promise<Record<string, unknown>> {
+  const report = await fixture() as Record<string, unknown>;
+  const metadata = report.metadata as Record<string, unknown>;
+  metadata.clientCollection = { ...input.source.clientCollection, authoritative: false };
+  const server = metadata.serverScan as Record<string, unknown>;
+  server.manifestEntriesSubmitted = input.source.files.length;
+  server.filesAccepted = input.source.files.length;
+  server.filesScanned = input.source.files.length;
+  server.filesSkipped = 0;
+  server.bytesScanned = input.source.files.reduce((total, file) => total + Buffer.byteLength(file.content, 'utf8'), 0);
+  server.skipCounts = {};
+  return report;
+}
+
 function client(fetchImplementation: typeof fetch, attempts = 1, deadline = new ActionDeadline(30_000)): ImpactPlatformClient {
   return new ImpactPlatformClient({
     apiUrl: 'https://alconite.com',
@@ -72,12 +86,67 @@ test('posts the strict check-linked request with masked-token-compatible bearer 
     assert.equal(init?.method, 'POST');
     assert.equal((init?.headers as Record<string, string>).authorization, `Bearer ${TOKEN}`);
     assert.equal(init?.redirect, 'manual');
-    return new Response(JSON.stringify(await fixture()), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify(await responseFixture()), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   const result = await client(mockFetch).analyze(request());
   assert.equal(result.overallRisk, 'HIGH');
   assert.equal(observedUrl, `https://alconite.com/api/v1/contract-guard/projects/${PROJECT_ID}/checks/${CHECK_ID}/impact`);
   assert.equal((JSON.parse(observedBody) as Record<string, unknown>).source !== undefined, true);
+});
+
+test('binds the response to the exact submitted inline manifest and logical root', async () => {
+  const cases: Array<(report: Record<string, unknown>, input: ImpactRequest) => void> = [
+    (report) => {
+      const server = ((report.metadata as Record<string, unknown>).serverScan as Record<string, unknown>);
+      server.inputType = 'TRUSTED_FILESYSTEM';
+      server.manifestEntriesSubmitted = null;
+      server.filesystemEntriesVisited = 1;
+      server.directoriesVisited = 1;
+    },
+    (report) => {
+      const change = (report.changes as Array<Record<string, unknown>>)[0];
+      const source = (change?.affectedSources as Array<Record<string, unknown>>)[0];
+      assert.ok(source);
+      source.file = 'src/not-submitted.ts';
+    },
+    (report) => {
+      const metadata = report.metadata as Record<string, unknown>;
+      metadata.warnings = [{ code: 'FILE_READ_FAILED', message: 'A source file could not be read.', path: 'src/not-submitted.ts' }];
+    },
+    (report) => {
+      const server = ((report.metadata as Record<string, unknown>).serverScan as Record<string, unknown>);
+      server.filesScanned = 0;
+    },
+    (_report, input) => { input.source.logicalRoot = 'packages/client'; },
+  ];
+  for (const mutate of cases) {
+    const input = request();
+    const report = await responseFixture(input);
+    mutate(report, input);
+    await assert.rejects(
+      client(async () => new Response(JSON.stringify(report), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })).analyze(input),
+      (error: unknown) => error instanceof Error && /invalid Impact report/u.test(error.message),
+    );
+  }
+});
+
+test('maps a stalled response-body read to the overall Action deadline', async () => {
+  const stalled = new ReadableStream<Uint8Array>({
+    start() {
+      // Deliberately leave the response open without bytes until the Action deadline aborts it.
+    },
+  });
+  await assert.rejects(
+    client(
+      async () => new Response(stalled, { status: 200, headers: { 'content-type': 'application/json' } }),
+      1,
+      new ActionDeadline(20),
+    ).analyze(request()),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'action_deadline_exceeded',
+  );
 });
 
 test('retries only explicit busy/storage errors and gateway responses without an Impact envelope', async () => {
@@ -90,7 +159,7 @@ test('retries only explicit busy/storage errors and gateway responses without an
         headers: { 'content-type': 'application/json', 'retry-after': '0' },
       });
     }
-    return new Response(JSON.stringify(await fixture()), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify(await responseFixture()), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   assert.equal((await client(busyFetch, 2).analyze(request())).overallRisk, 'HIGH');
   assert.equal(requests, 2);
@@ -99,7 +168,7 @@ test('retries only explicit busy/storage errors and gateway responses without an
   const gatewayFetch: typeof fetch = async () => {
     requests += 1;
     if (requests === 1) return new Response('gateway timeout', { status: 504, headers: { 'retry-after': '0' } });
-    return new Response(JSON.stringify(await fixture()), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify(await responseFixture()), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   await client(gatewayFetch, 2).analyze(request());
   assert.equal(requests, 2);
@@ -108,7 +177,7 @@ test('retries only explicit busy/storage errors and gateway responses without an
   const gateway502Fetch: typeof fetch = async () => {
     requests += 1;
     if (requests === 1) return new Response('bad gateway', { status: 502, headers: { 'retry-after': '0' } });
-    return new Response(JSON.stringify(await fixture()), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify(await responseFixture()), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   await client(gateway502Fetch, 2).analyze(request());
   assert.equal(requests, 2);
@@ -122,10 +191,33 @@ test('retries only explicit busy/storage errors and gateway responses without an
         headers: { 'content-type': 'application/json', 'retry-after': '0' },
       });
     }
-    return new Response(JSON.stringify(await fixture()), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify(await responseFixture()), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   await client(storageFetch, 2).analyze(request());
   assert.equal(requests, 2);
+});
+
+test('requires the exact status and code pair for explicit retryable errors', async () => {
+  for (const [status, code] of [
+    [503, 'impact_analysis_busy'],
+    [429, 'impact_storage_unavailable'],
+    [429, 'impact_disabled'],
+    [503, 'impact_analysis_timeout'],
+  ] as const) {
+    let requests = 0;
+    const mockFetch: typeof fetch = async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ error: { code, message: 'Not an exact retry pair.' } }), {
+        status,
+        headers: { 'content-type': 'application/json', 'retry-after': '0' },
+      });
+    };
+    await assert.rejects(
+      client(mockFetch, 3).analyze(request()),
+      (error: unknown) => error instanceof ImpactActionError && error.platformCode === code,
+    );
+    assert.equal(requests, 1);
+  }
 });
 
 test('does not retry deterministic timeout, disabled, or other valid Impact errors', async () => {
@@ -161,7 +253,7 @@ test('retries bounded network failures but refuses redirects and unsupported res
   const networkFetch: typeof fetch = async () => {
     requests += 1;
     if (requests === 1) throw new TypeError('offline');
-    return new Response(JSON.stringify(await fixture()), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify(await responseFixture()), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   await client(networkFetch, 2).analyze(request());
   assert.equal(requests, 2);

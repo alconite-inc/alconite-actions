@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, test } from 'node:test';
 import { ActionDeadline } from '../src/impact/deadline';
 import { ImpactActionError } from '../src/impact/errors';
+import { assertSupportedActionPlatform } from '../src/impact/secure-filesystem';
 import {
   collectSourceManifest,
   DEFAULT_SOURCE_COLLECTION_LIMITS,
@@ -27,6 +28,13 @@ async function temporaryWorkspace(): Promise<string> {
 function deadline(): ActionDeadline {
   return new ActionDeadline(30_000);
 }
+
+test('fails the Action platform boundary closed before Windows source traversal', () => {
+  assert.throws(
+    () => assertSupportedActionPlatform('win32'),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'unsupported_secure_source_filesystem',
+  );
+});
 
 test('locks the Standard Action source-collection profile', () => {
   assert.deepEqual(DEFAULT_SOURCE_COLLECTION_LIMITS, {
@@ -344,12 +352,39 @@ test('does not upload multiply-linked regular files', async () => {
 test('strictly validates the source root and ignore-only patterns', () => {
   assert.equal(validatePortableRoot('.'), '.');
   assert.equal(validatePortableRoot('packages/client'), 'packages/client');
-  for (const unsafe of ['../outside', '/absolute', 'C:/absolute', 'a\\b', 'a/./b']) {
+  for (const unsafe of [
+    '../outside', '/absolute', 'C:/absolute', 'a\\b', 'a/./b', 'packages/CON', 'packages/prn.client',
+    'packages/trailing.', 'packages/trailing ', 'packages/bad:name', 'packages/control\u0001name',
+    'packages/control\u0085name',
+  ]) {
     assert.throws(() => validatePortableRoot(unsafe), /source-root/u);
   }
   assert.deepEqual(validateAdditionalIgnorePatterns(['examples/**', '', ' fixtures/** ']), ['examples/**', 'fixtures/**']);
+  assert.deepEqual(validateAdditionalIgnorePatterns([...Array<string>(25).fill('   '), 'examples/**']), ['examples/**']);
   for (const unsafe of ['!include.ts', '/rooted', '../outside', 'a\\b', 'file..backup.ts']) {
     assert.throws(() => validateAdditionalIgnorePatterns([unsafe]), /unsupported pattern/u);
+  }
+});
+
+test('rejects non-portable Linux checkout names before reading or submitting source', {
+  skip: process.platform !== 'linux',
+}, async () => {
+  for (const filename of ['CON.ts', 'control\u0001.ts', 'trailing.ts.', 'bad:name.ts', 'bad\\name.ts']) {
+    const workspace = await temporaryWorkspace();
+    await fs.writeFile(path.join(workspace, filename), 'export const value = true;\n');
+    let fileOpened = false;
+    await assert.rejects(
+      collectSourceManifest({
+        workspace,
+        sourceRoot: '.',
+        includeGeneratedDirectories: true,
+        additionalIgnorePatterns: [],
+        deadline: deadline(),
+        hooks: { beforeFileOpen: async () => { fileOpened = true; } },
+      }),
+      (error: unknown) => error instanceof ImpactActionError && error.code === 'invalid_input',
+    );
+    assert.equal(fileOpened, false);
   }
 });
 

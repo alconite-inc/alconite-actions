@@ -95,7 +95,6 @@ test('runs the compiled Impact Action against a local mock without logging sourc
       child.once('error', reject);
       child.once('exit', resolve);
     });
-    assert.equal(observedRequest, true);
     const stdoutAfterMask = stdout.replace(`::add-mask::${TOKEN}\n`, '');
     assert.ok(!stdoutAfterMask.includes(TOKEN));
     assert.ok(!stderr.includes(TOKEN));
@@ -104,10 +103,13 @@ test('runs the compiled Impact Action against a local mock without logging sourc
     assert.ok(!(await fs.readFile(summaryPath, 'utf8')).includes(SOURCE_MARKER));
 
     if (process.platform === 'win32') {
+      assert.equal(observedRequest, false);
       assert.equal(exitCode, 1);
-      assert.match(stdout, /Secure Impact report creation is unavailable/u);
+      assert.match(stdout, /requires a Linux runner/u);
+      assert.doesNotMatch(stdout, /Collected .* source files/u);
       return;
     }
+    assert.equal(observedRequest, true);
     assert.equal(exitCode, 0, stderr);
     const outputs = await fs.readFile(outputPath, 'utf8');
     assert.match(outputs, /overall-risk<<[^\n]+\nHIGH\n/u);
@@ -121,4 +123,3 @@ test('runs the compiled Impact Action against a local mock without logging sourc
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
-

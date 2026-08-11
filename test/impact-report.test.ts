@@ -100,6 +100,53 @@ test('removes only its verified empty invocation directory when report creation 
   assert.deepEqual(await fs.readdir(workspace), []);
 });
 
+test('Linux report-root binding tolerates invocation metadata changes and preserves scoped cleanup', {
+  skip: process.platform !== 'linux',
+}, async () => {
+  const { workspace, runner } = await roots();
+  const report = await fixture();
+  const before = await fs.stat(runner, { bigint: true });
+  const reportPath = await writePrivateReport(report, runner, workspace, new ActionDeadline(30_000));
+  const after = await fs.stat(runner, { bigint: true });
+  assert.equal(after.dev, before.dev);
+  assert.equal(after.ino, before.ino);
+  assert.equal(after.mode, before.mode);
+  await fs.unlink(reportPath);
+  await fs.rmdir(path.dirname(reportPath));
+  await assert.rejects(
+    writePrivateReport(report, runner, workspace, new ActionDeadline(30_000), {
+      afterFileCreated: async () => { throw new Error('cleanup injection'); },
+    }),
+    (error: unknown) => error instanceof ImpactActionError && error.code === 'report_write_failed',
+  );
+  assert.deepEqual(await fs.readdir(runner), []);
+});
+
+test('fails closed without report bytes when the whole private child directory is swapped', {
+  skip: process.platform !== 'linux',
+}, async () => {
+  const { workspace, runner } = await roots();
+  let replacement = '';
+  let displaced = '';
+  await assert.rejects(
+    writePrivateReport(await fixture(), runner, workspace, new ActionDeadline(30_000), {
+      afterFileCreated: async (filename) => {
+        const directory = path.dirname(filename);
+        replacement = directory;
+        displaced = `${directory}-displaced`;
+        await fs.rename(directory, displaced);
+        await fs.mkdir(directory, { mode: 0o700 });
+      },
+    }),
+    (error: unknown) => error instanceof ImpactActionError &&
+      (error.code === 'unsupported_secure_report_filesystem' || error.code === 'report_write_failed'),
+  );
+  assert.ok(replacement);
+  assert.ok(displaced);
+  assert.deepEqual(await fs.readdir(replacement), []);
+  assert.deepEqual(await fs.readdir(displaced), []);
+});
+
 test('fails closed when the exclusive destination name or path identity is raced', async () => {
   const { workspace, runner } = await roots();
   const report = await fixture();

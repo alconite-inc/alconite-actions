@@ -603,10 +603,50 @@ var ActionDeadline = class {
   }
 };
 
+// src/impact/portable-path.ts
+var WINDOWS_DEVICE_BASENAMES = /* @__PURE__ */ new Set([
+  "CON",
+  "PRN",
+  "AUX",
+  "NUL",
+  "COM1",
+  "COM2",
+  "COM3",
+  "COM4",
+  "COM5",
+  "COM6",
+  "COM7",
+  "COM8",
+  "COM9",
+  "LPT1",
+  "LPT2",
+  "LPT3",
+  "LPT4",
+  "LPT5",
+  "LPT6",
+  "LPT7",
+  "LPT8",
+  "LPT9"
+]);
+function isPortablePathComponent(component) {
+  if (!component || component === "." || component === ".." || component.endsWith(".") || component.endsWith(" ")) {
+    return false;
+  }
+  if (new RegExp('[<>:"|?*]|\\p{Cc}', "u").test(component)) return false;
+  const basename = component.split(".", 1)[0]?.toUpperCase() ?? "";
+  return !WINDOWS_DEVICE_BASENAMES.has(basename);
+}
+function hasPortableRelativePathSyntax(value) {
+  return value.length > 0 && !value.includes("\\") && !value.startsWith("/") && !/^[A-Za-z]:/u.test(value) && value.split("/").every(isPortablePathComponent);
+}
+
 // src/impact/models.ts
 var IMPACT_REPORT_SCHEMA_VERSION = "alconite.impact.report.v1";
 var CLIENT_COLLECTION_SCHEMA_VERSION = "alconite.impact.client-collection.v1";
 var MAX_REPORT_BYTES = 8 * 1024 * 1024;
+var U32_MAX = 4294967295;
+var STANDARD_MAX_AFFECTED_LOCATIONS = 5e4;
+var STANDARD_MAX_AFFECTED_FILES = 2e3;
 var RISK_VALUES = ["NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
 var CONFIDENCE_VALUES = ["LOW", "MEDIUM", "HIGH"];
 var SOURCE_LANGUAGES = ["RUST", "JAVA", "TYPESCRIPT", "JAVASCRIPT"];
@@ -618,6 +658,7 @@ var SKIP_CODES = [
   "BINARY_FILE",
   "INVALID_UTF8",
   "FILE_TOO_LARGE",
+  "FILE_READ_FAILED",
   "SYMLINK_OR_REPARSE",
   "PATH_TOO_LONG",
   "DEPTH_EXCEEDED"
@@ -718,8 +759,8 @@ var ImpactContractError = class extends Error {
   }
 };
 var HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"]);
-var CLASSIFICATIONS = /* @__PURE__ */ new Set(["breaking", "risky", "non_breaking", "informational"]);
-var CATEGORIES = /* @__PURE__ */ new Set([
+var CLASSIFICATION_VALUES = ["breaking", "risky", "non_breaking", "informational"];
+var CATEGORY_VALUES = [
   "operation",
   "parameter",
   "request_body",
@@ -731,12 +772,22 @@ var CATEGORIES = /* @__PURE__ */ new Set([
   "metadata",
   "analyzer_regression",
   "analyzer_resolution"
-]);
+];
+var CLASSIFICATIONS = new Set(CLASSIFICATION_VALUES);
+var CATEGORIES = new Set(CATEGORY_VALUES);
 var RISK_SET = new Set(RISK_VALUES);
 var CONFIDENCE_SET = new Set(CONFIDENCE_VALUES);
 var LANGUAGE_SET = new Set(SOURCE_LANGUAGES);
 var EVIDENCE_SET = new Set(EVIDENCE_TYPES);
 var CONDITION_SET = new Set(CONFIDENCE_CONDITIONS);
+var HIGH_CONFIDENCE_CONDITION_SET = /* @__PURE__ */ new Set([
+  "METHOD_PATH_CALL",
+  "MATCHING_TYPE_MEMBER",
+  "OWNED_ENUM",
+  "OWNED_PARAMETER",
+  "OPERATION_PATH_CALL"
+]);
+var MEDIUM_CONFIDENCE_CONDITION_SET = /* @__PURE__ */ new Set(["QUALIFIED_MEMBER", "EXACT_CLIENT_METHOD", "EXACT_TYPE"]);
 var WARNING_SET = new Set(WARNING_CODES);
 var CHANGE_KIND_SET = new Set(CHANGE_KINDS);
 var SKIP_CODE_SET = new Set(SKIP_CODES);
@@ -766,7 +817,7 @@ function byteString(value, context, minimum, maximum) {
 function nullableString(value, context, maximum) {
   return value === null ? null : stringValue(value, context, 1, maximum);
 }
-function integer(value, context, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) {
+function integer(value, context, minimum = 0, maximum = U32_MAX) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
     mismatch(`${context} must be a bounded integer`);
   }
@@ -784,15 +835,6 @@ function arrayValue(value, context, maximum) {
   if (!Array.isArray(value) || value.length > maximum) mismatch(`${context} must be a bounded array`);
   return value;
 }
-function sortedUnique(values, context) {
-  for (let index = 1; index < values.length; index += 1) {
-    const previous = values[index - 1];
-    const current = values[index];
-    if (previous === void 0 || current === void 0 || Buffer.compare(Buffer.from(previous), Buffer.from(current)) >= 0) {
-      mismatch(`${context} must be sorted and deduplicated`);
-    }
-  }
-}
 function compareUtf8(left, right) {
   return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
@@ -807,11 +849,7 @@ function canonicalUnique(values, canonical, context) {
 }
 function validatePortablePath(value, context) {
   const candidate = byteString(value, context, 1, 512);
-  if (candidate.includes("\\") || candidate.includes("\0") || candidate.startsWith("/") || /^[A-Za-z]:/u.test(candidate) || candidate.startsWith("//")) mismatch(`${context} is not a portable relative path`);
-  const components = candidate.split("/");
-  if (components.some((component) => !component || component === "." || component === "..")) {
-    mismatch(`${context} is not a normalized portable path`);
-  }
+  if (!hasPortableRelativePathSyntax(candidate)) mismatch(`${context} is not a normalized portable path`);
   return candidate;
 }
 function validateSkipCounts(value, context) {
@@ -963,10 +1001,7 @@ function validateSubjectForKind(item, present, kind) {
     return requireExactSubject(present, ["schema", "enumValue"], kind);
   }
   if (kind === "SECURITY_REQUIREMENT_STRENGTHENED" || kind === "SECURITY_REQUIREMENT_WEAKENED") {
-    if (!(present.size === 1 && present.has("operation")) && !(present.size === 2 && present.has("operation") && present.has("securityScheme"))) {
-      mismatch(`change.subject does not match ${kind}`);
-    }
-    return;
+    return requireExactSubject(present, ["operation"], kind);
   }
   if (kind === "SECURITY_SCOPE_ADDED" || kind === "SECURITY_SCOPE_REMOVED") {
     return requireExactSubject(present, ["operation", "securityScope"], kind);
@@ -976,6 +1011,10 @@ function validateSubjectForKind(item, present, kind) {
   }
   if (kind === "SERVER_ADDED" || kind === "SERVER_REMOVED" || kind === "METADATA_CHANGED") {
     return requireExactSubject(present, ["metadataPointer"], kind);
+  }
+  if (kind === "ANALYZER_REGRESSION" || kind === "ANALYZER_RESOLUTION") {
+    const analyzerShapes = ["operation", "schema", "metadataPointer"].filter((key) => present.has(key));
+    if (present.size !== 1 || analyzerShapes.length !== 1) mismatch(`change.subject does not match ${kind}`);
   }
 }
 function validateEvidence(value) {
@@ -987,8 +1026,8 @@ function validateEvidence(value) {
 function validateAffectedSource(value) {
   const item = record(value, "affected source", ["file", "line", "column", "language", "confidence", "evidence"]);
   validatePortablePath(item.file, "affected source.file");
-  integer(item.line, "affected source.line", 1);
-  integer(item.column, "affected source.column", 1);
+  integer(item.line, "affected source.line", 1, U32_MAX);
+  integer(item.column, "affected source.column", 1, U32_MAX);
   enumValue(item.language, "affected source.language", LANGUAGE_SET);
   enumValue(item.confidence, "affected source.confidence", CONFIDENCE_SET);
   const evidence = arrayValue(item.evidence, "affected source.evidence", 12).map(validateEvidence);
@@ -1002,7 +1041,7 @@ function validateAffectedSource(value) {
   }
   return item;
 }
-function validateConfidenceBasis(value, confidence, risk, affectedFiles, highConfidenceFiles) {
+function validateConfidenceBasis(value, confidence, risk, affectedFiles, highConfidenceFiles, impactEngineVersion) {
   const item = record(value, "change.confidenceBasis", ["level", "conditions", "evidenceTypes", "criticalRisk"]);
   const level = item.level === null ? null : enumValue(item.level, "change.confidenceBasis.level", CONFIDENCE_SET);
   if (level !== confidence) mismatch("change.confidenceBasis.level disagrees with confidence");
@@ -1012,6 +1051,11 @@ function validateConfidenceBasis(value, confidence, risk, affectedFiles, highCon
   canonicalUnique(evidenceTypes, EVIDENCE_TYPES, "change.confidenceBasis.evidenceTypes");
   if (confidence === null && (conditions.length !== 0 || evidenceTypes.length !== 0 || item.criticalRisk !== null)) {
     mismatch("empty confidence must have an empty confidence basis");
+  }
+  if (confidence !== null) {
+    if (evidenceTypes.length === 0) mismatch("non-empty confidence requires evidence types");
+    const computedLevel = conditions.some((condition) => HIGH_CONFIDENCE_CONDITION_SET.has(condition)) ? "HIGH" : conditions.some((condition) => MEDIUM_CONFIDENCE_CONDITION_SET.has(condition)) || evidenceTypes.length >= 2 ? "MEDIUM" : "LOW";
+    if (level !== computedLevel) mismatch("change.confidenceBasis.level disagrees with its v1 conditions and evidence types");
   }
   if (risk === "CRITICAL" !== (item.criticalRisk !== null)) mismatch("criticalRisk basis disagrees with risk");
   if (item.criticalRisk !== null) {
@@ -1023,16 +1067,82 @@ function validateConfidenceBasis(value, confidence, risk, affectedFiles, highCon
       "observedHighConfidenceFiles"
     ]);
     if (critical.destructiveRemoval !== true) mismatch("criticalRisk.destructiveRemoval must be true");
-    integer(critical.requiredDistinctFiles, "criticalRisk.requiredDistinctFiles", 10, 10);
-    integer(critical.requiredHighConfidenceFiles, "criticalRisk.requiredHighConfidenceFiles", 5, 5);
-    const observedFiles = integer(critical.observedDistinctFiles, "criticalRisk.observedDistinctFiles", 10);
-    const observedHighFiles = integer(critical.observedHighConfidenceFiles, "criticalRisk.observedHighConfidenceFiles", 5);
-    if (observedFiles !== affectedFiles || observedHighFiles !== highConfidenceFiles) {
+    const requiredFiles = integer(critical.requiredDistinctFiles, "criticalRisk.requiredDistinctFiles", 1, U32_MAX);
+    const requiredHighFiles = integer(critical.requiredHighConfidenceFiles, "criticalRisk.requiredHighConfidenceFiles", 1, U32_MAX);
+    if (impactEngineVersion === 1 && (requiredFiles !== 10 || requiredHighFiles !== 5)) {
+      mismatch("criticalRisk thresholds disagree with Impact engine v1");
+    }
+    const observedFiles = integer(critical.observedDistinctFiles, "criticalRisk.observedDistinctFiles", 1, U32_MAX);
+    const observedHighFiles = integer(critical.observedHighConfidenceFiles, "criticalRisk.observedHighConfidenceFiles", 1, U32_MAX);
+    if (observedFiles !== affectedFiles || observedHighFiles !== highConfidenceFiles || observedFiles < requiredFiles || observedHighFiles < requiredHighFiles) {
       mismatch("criticalRisk observed counts disagree with affected-source counts");
     }
   }
 }
-function validateChange(value) {
+var DESTRUCTIVE_REMOVALS = /* @__PURE__ */ new Set(["ENDPOINT_REMOVED", "HTTP_METHOD_REMOVED", "SCHEMA_REMOVED"]);
+function expectedCategory(kind) {
+  switch (kind) {
+    case "ENDPOINT_ADDED":
+    case "ENDPOINT_REMOVED":
+    case "HTTP_METHOD_ADDED":
+    case "HTTP_METHOD_REMOVED":
+      return "operation";
+    case "PARAMETER_ADDED":
+    case "REQUIRED_PARAMETER_ADDED":
+    case "PARAMETER_REMOVED":
+    case "PARAMETER_TYPE_CHANGED":
+    case "PARAMETER_REQUIREMENT_CHANGED":
+    case "PARAMETER_CONSTRAINT_CHANGED":
+    case "PARAMETER_ENUM_VALUE_ADDED":
+    case "PARAMETER_ENUM_VALUE_REMOVED":
+      return "parameter";
+    case "REQUEST_BODY_ADDED":
+    case "REQUIRED_REQUEST_BODY_ADDED":
+    case "REQUEST_BODY_REMOVED":
+    case "REQUEST_BODY_REQUIREMENT_CHANGED":
+    case "REQUEST_SCHEMA_CHANGED":
+      return "request_body";
+    case "REQUEST_MEDIA_TYPE_ADDED":
+    case "REQUEST_MEDIA_TYPE_REMOVED":
+    case "RESPONSE_MEDIA_TYPE_ADDED":
+    case "RESPONSE_MEDIA_TYPE_REMOVED":
+      return "media_type";
+    case "RESPONSE_ADDED":
+    case "RESPONSE_REMOVED":
+    case "RESPONSE_SCHEMA_CHANGED":
+      return "response";
+    case "SCHEMA_ADDED":
+    case "SCHEMA_REMOVED":
+    case "PROPERTY_ADDED":
+    case "PROPERTY_REMOVED":
+    case "PROPERTY_TYPE_CHANGED":
+    case "PROPERTY_REQUIREMENT_CHANGED":
+    case "PROPERTY_CONSTRAINT_CHANGED":
+    case "REQUIRED_REQUEST_PROPERTY_ADDED":
+    case "ENUM_VALUE_ADDED":
+    case "ENUM_VALUE_REMOVED":
+      return "schema";
+    case "OPERATION_ID_CHANGED":
+    case "DEPRECATION_CHANGED":
+    case "METADATA_CHANGED":
+      return "metadata";
+    case "SECURITY_REQUIREMENT_STRENGTHENED":
+    case "SECURITY_REQUIREMENT_WEAKENED":
+    case "SECURITY_SCHEME_ADDED":
+    case "SECURITY_SCHEME_REMOVED":
+    case "SECURITY_SCOPE_ADDED":
+    case "SECURITY_SCOPE_REMOVED":
+      return "security";
+    case "SERVER_ADDED":
+    case "SERVER_REMOVED":
+      return "server";
+    case "ANALYZER_REGRESSION":
+      return "analyzer_regression";
+    case "ANALYZER_RESOLUTION":
+      return "analyzer_resolution";
+  }
+}
+function validateChange(value, impactEngineVersion) {
   const item = record(value, "change", [
     "id",
     "deltaFingerprint",
@@ -1058,13 +1168,14 @@ function validateChange(value) {
     "affectedSources",
     "recommendation"
   ]);
-  if (typeof item.id !== "string" || !/^cgdelta_[a-f0-9]{32}$/u.test(item.id)) mismatch("change.id is invalid");
   if (typeof item.deltaFingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(item.deltaFingerprint)) mismatch("change.deltaFingerprint is invalid");
+  if (item.id !== `cgdelta_${item.deltaFingerprint.slice(0, 32)}`) mismatch("change.id does not match its delta fingerprint");
   const kind = enumValue(item.kind, "change.kind", CHANGE_KIND_SET);
   enumValue(item.classification, "change.classification", CLASSIFICATIONS);
-  enumValue(item.category, "change.category", CATEGORIES);
+  const category = enumValue(item.category, "change.category", CATEGORIES);
+  if (category !== expectedCategory(kind)) mismatch("change.category does not match its semantic kind");
   byteString(item.ruleId, "change.ruleId", 1, 64);
-  integer(item.ruleVersion, "change.ruleVersion", 1);
+  integer(item.ruleVersion, "change.ruleVersion", 1, U32_MAX);
   stringValue(item.summary, "change.summary", 1, 200);
   stringValue(item.explanation, "change.explanation", 1, 1e3);
   if (item.baselineValue !== null) stringValue(item.baselineValue, "change.baselineValue", 0, 500);
@@ -1073,12 +1184,12 @@ function validateChange(value) {
   const potentialRisk = enumValue(item.potentialRisk, "change.potentialRisk", RISK_SET);
   const risk = enumValue(item.risk, "change.risk", RISK_SET);
   const confidence = item.confidence === null ? null : enumValue(item.confidence, "change.confidence", CONFIDENCE_SET);
-  const total = integer(item.affectedLocationCount, "change.affectedLocationCount");
-  const returned = integer(item.returnedAffectedLocationCount, "change.returnedAffectedLocationCount");
-  const omitted = integer(item.omittedAffectedLocationCount, "change.omittedAffectedLocationCount");
-  const files = integer(item.affectedFileCount, "change.affectedFileCount");
-  const highFiles = integer(item.highConfidenceFileCount, "change.highConfidenceFileCount");
-  validateConfidenceBasis(item.confidenceBasis, confidence, risk, files, highFiles);
+  const total = integer(item.affectedLocationCount, "change.affectedLocationCount", 0, STANDARD_MAX_AFFECTED_LOCATIONS);
+  const returned = integer(item.returnedAffectedLocationCount, "change.returnedAffectedLocationCount", 0, 200);
+  const omitted = integer(item.omittedAffectedLocationCount, "change.omittedAffectedLocationCount", 0, STANDARD_MAX_AFFECTED_LOCATIONS);
+  const files = integer(item.affectedFileCount, "change.affectedFileCount", 0, STANDARD_MAX_AFFECTED_FILES);
+  const highFiles = integer(item.highConfidenceFileCount, "change.highConfidenceFileCount", 0, STANDARD_MAX_AFFECTED_FILES);
+  validateConfidenceBasis(item.confidenceBasis, confidence, risk, files, highFiles, impactEngineVersion);
   const sources = arrayValue(item.affectedSources, "change.affectedSources", 200).map(validateAffectedSource);
   for (let index = 1; index < sources.length; index += 1) {
     const left = sources[index - 1];
@@ -1094,6 +1205,11 @@ function validateChange(value) {
     mismatch("change confidence/risk does not match its affected-source count");
   }
   if (total > 0 && potentialRisk === "NONE") mismatch("an affected change cannot have NONE potential risk");
+  if (total > 0) {
+    const criticalElevation = risk === "CRITICAL" && potentialRisk === "HIGH" && DESTRUCTIVE_REMOVALS.has(kind);
+    if (risk === "CRITICAL" && !criticalElevation) mismatch("change Critical risk is not a valid destructive-removal elevation");
+    if (risk !== potentialRisk && !criticalElevation) mismatch("change risk does not match its potential risk");
+  }
   const recommendation = record(item.recommendation, "change.recommendation", ["code", "message"]);
   if (typeof recommendation.code !== "string" || !/^[a-z][a-z0-9_]{0,99}$/u.test(recommendation.code)) {
     mismatch("change.recommendation.code is invalid");
@@ -1102,6 +1218,42 @@ function validateChange(value) {
   const compactRow = { ...item, affectedSources: [] };
   if (Buffer.byteLength(JSON.stringify(compactRow), "utf8") > 6144) mismatch("change compact row exceeds its bound");
   return item;
+}
+function compareOptionalString(left, right) {
+  if (left === null) return right === null ? 0 : -1;
+  if (right === null) return 1;
+  return compareUtf8(left, right);
+}
+function compareOptionalObject(left, right, compare) {
+  if (left === null) return right === null ? 0 : -1;
+  if (right === null) return 1;
+  return compare(left, right);
+}
+function compareSubject(left, right) {
+  const operation = compareOptionalObject(left.operation, right.operation, (a, b) => compareUtf8(a.path, b.path) || compareUtf8(a.method, b.method) || compareOptionalString(a.baselineOperationId, b.baselineOperationId) || compareOptionalString(a.candidateOperationId, b.candidateOperationId));
+  if (operation !== 0) return operation;
+  const schema = compareOptionalObject(left.schema, right.schema, (a, b) => {
+    const identity = compareUtf8(a.name, b.name) || compareOptionalString(a.property, b.property);
+    if (identity !== 0) return identity;
+    const usesOrder = ["REQUEST", "RESPONSE", "UNKNOWN"];
+    const length = Math.min(a.uses.length, b.uses.length);
+    for (let index = 0; index < length; index += 1) {
+      const aUse = a.uses[index];
+      const bUse = b.uses[index];
+      if (!aUse || !bUse) return a.uses.length - b.uses.length;
+      const comparison = usesOrder.indexOf(aUse) - usesOrder.indexOf(bUse);
+      if (comparison !== 0) return comparison;
+    }
+    return a.uses.length - b.uses.length;
+  });
+  if (schema !== 0) return schema;
+  const locations = ["PATH", "QUERY", "HEADER", "COOKIE"];
+  const parameter = compareOptionalObject(left.parameter, right.parameter, (a, b) => compareUtf8(a.name, b.name) || locations.indexOf(a.location) - locations.indexOf(b.location));
+  if (parameter !== 0) return parameter;
+  return compareOptionalString(left.responseStatus, right.responseStatus) || compareOptionalString(left.mediaType, right.mediaType) || compareOptionalString(left.enumValue, right.enumValue) || compareOptionalString(left.securityScheme, right.securityScheme) || compareOptionalString(left.securityScope, right.securityScope) || compareOptionalString(left.metadataPointer, right.metadataPointer);
+}
+function compareChanges(left, right) {
+  return CLASSIFICATION_VALUES.indexOf(left.classification) - CLASSIFICATION_VALUES.indexOf(right.classification) || CATEGORY_VALUES.indexOf(left.category) - CATEGORY_VALUES.indexOf(right.category) || compareSubject(left.subject, right.subject) || CHANGE_KINDS.indexOf(left.kind) - CHANGE_KINDS.indexOf(right.kind) || compareUtf8(left.deltaFingerprint, right.deltaFingerprint);
 }
 function validateServerScan(value) {
   const item = record(value, "metadata.serverScan", [
@@ -1160,6 +1312,7 @@ function validateWarning(value) {
   enumValue(item.code, "metadata warning.code", WARNING_SET);
   stringValue(item.message, "metadata warning.message", 1, 200);
   if ("path" in item) validatePortablePath(item.path, "metadata warning.path");
+  return item;
 }
 function validateContract(value, expectedProjectId, expectedCheckId) {
   const item = record(value, "contract", [
@@ -1203,7 +1356,8 @@ function validateEngines(value) {
     "legacyComparisonEngineVersion",
     "contractDeltaEngineVersion",
     "impactAnalysisEngineVersion"
-  ]) integer(item[key], `engines.${key}`, 1);
+  ]) integer(item[key], `engines.${key}`, 1, U32_MAX);
+  return item.impactAnalysisEngineVersion;
 }
 function validateImpactReport(value, expectedProjectId, expectedCheckId) {
   const item = record(value, "report", [
@@ -1224,17 +1378,29 @@ function validateImpactReport(value, expectedProjectId, expectedCheckId) {
     mismatch("analysisFingerprint is invalid");
   }
   validateContract(item.contract, expectedProjectId, expectedCheckId);
-  validateEngines(item.engines);
+  const impactEngineVersion = validateEngines(item.engines);
   const overallRisk = enumValue(item.overallRisk, "overallRisk", RISK_SET);
   const overallPotentialRisk = enumValue(item.overallPotentialRisk, "overallPotentialRisk", RISK_SET);
-  const breaking = integer(item.breakingChanges, "breakingChanges");
-  const affectedFiles = integer(item.affectedFiles, "affectedFiles");
-  const affectedLocations = integer(item.affectedSourceLocations, "affectedSourceLocations");
-  const changes = arrayValue(item.changes, "changes", 1e3).map(validateChange);
+  const breaking = integer(item.breakingChanges, "breakingChanges", 0, 1e3);
+  const affectedFiles = integer(item.affectedFiles, "affectedFiles", 0, STANDARD_MAX_AFFECTED_FILES);
+  const affectedLocations = integer(
+    item.affectedSourceLocations,
+    "affectedSourceLocations",
+    0,
+    STANDARD_MAX_AFFECTED_LOCATIONS
+  );
+  const changes = arrayValue(item.changes, "changes", 1e3).map((change) => validateChange(change, impactEngineVersion));
   if (new Set(changes.map((change) => change.id)).size !== changes.length || new Set(changes.map((change) => change.deltaFingerprint)).size !== changes.length) {
     mismatch("changes must have unique identities");
   }
+  for (let index = 1; index < changes.length; index += 1) {
+    const left = changes[index - 1];
+    const right = changes[index];
+    if (!left || !right || compareChanges(left, right) >= 0) mismatch("changes must use canonical Contract Delta ordering");
+  }
   if (changes.filter((change) => change.classification === "breaking").length !== breaking) mismatch("breakingChanges is inconsistent");
+  const completeLocations = changes.reduce((total2, change) => total2 + change.affectedLocationCount, 0);
+  if (affectedLocations !== completeLocations) mismatch("affectedSourceLocations is inconsistent with its complete change counts");
   const riskRank = (risk) => RISK_VALUES.indexOf(risk);
   const expectedRisk = changes.reduce((maximum, change) => riskRank(change.risk) > riskRank(maximum) ? change.risk : maximum, "NONE");
   const expectedPotential = changes.reduce((maximum, change) => riskRank(change.potentialRisk) > riskRank(maximum) ? change.potentialRisk : maximum, "NONE");
@@ -1259,34 +1425,119 @@ function validateImpactReport(value, expectedProjectId, expectedCheckId) {
   if ("clientCollection" in metadata) validateClientCollection(metadata.clientCollection, "metadata.clientCollection");
   const languages = arrayValue(metadata.languagesDetected, "metadata.languagesDetected", SOURCE_LANGUAGES.length).map((entry) => enumValue(entry, "metadata.languagesDetected[]", LANGUAGE_SET));
   canonicalUnique(languages, SOURCE_LANGUAGES, "metadata.languagesDetected");
-  const warnings = arrayValue(metadata.warnings, "metadata.warnings", 200);
-  warnings.forEach(validateWarning);
-  const warningKeys = warnings.map((warning) => {
-    const item2 = warning;
-    return `${item2.code}\0${item2.path ?? ""}`;
-  });
-  sortedUnique(warningKeys, "metadata.warnings");
-  const warningsOmitted = integer(metadata.warningsOmitted, "metadata.warningsOmitted");
+  const warnings = arrayValue(metadata.warnings, "metadata.warnings", 200).map(validateWarning);
+  for (let index = 1; index < warnings.length; index += 1) {
+    const left = warnings[index - 1];
+    const right = warnings[index];
+    if (!left || !right) mismatch("metadata.warnings ordering is invalid");
+    const pathComparison = left.path === void 0 ? right.path === void 0 ? 0 : -1 : right.path === void 0 ? 1 : compareUtf8(left.path, right.path);
+    const comparison = compareUtf8(left.code, right.code) || pathComparison || compareUtf8(left.message, right.message);
+    if (comparison >= 0) mismatch("metadata.warnings must be sorted and deduplicated by code, path, and message");
+  }
+  const warningsOmitted = integer(metadata.warningsOmitted, "metadata.warningsOmitted", 0, U32_MAX);
   const truncated = booleanValue(metadata.truncated, "metadata.truncated");
-  const total = integer(metadata.totalAffectedSourceLocations, "metadata.totalAffectedSourceLocations");
-  const returned = integer(metadata.returnedAffectedSourceLocations, "metadata.returnedAffectedSourceLocations");
-  const changesWithout = integer(metadata.changesWithoutReturnedLocations, "metadata.changesWithoutReturnedLocations");
-  integer(metadata.analysisDurationMs, "metadata.analysisDurationMs");
+  const total = integer(
+    metadata.totalAffectedSourceLocations,
+    "metadata.totalAffectedSourceLocations",
+    0,
+    STANDARD_MAX_AFFECTED_LOCATIONS
+  );
+  const returned = integer(metadata.returnedAffectedSourceLocations, "metadata.returnedAffectedSourceLocations", 0, 5e3);
+  const changesWithout = integer(metadata.changesWithoutReturnedLocations, "metadata.changesWithoutReturnedLocations", 0, 1e3);
+  integer(metadata.analysisDurationMs, "metadata.analysisDurationMs", 0, 12e4);
   const expectedReturned = changes.reduce((sum, change) => sum + change.returnedAffectedLocationCount, 0);
   const expectedChangesWithout = changes.filter((change) => change.affectedLocationCount > 0 && change.returnedAffectedLocationCount === 0).length;
   if (total !== affectedLocations || returned !== expectedReturned || changesWithout !== expectedChangesWithout) {
     mismatch("metadata affected-source counts are inconsistent");
   }
-  if (returned > 5e3) mismatch("metadata.returnedAffectedSourceLocations exceeds the Standard profile");
   const evidenceOmitted = changes.some((change) => change.omittedAffectedLocationCount > 0);
   if (truncated !== (evidenceOmitted || warningsOmitted > 0 || warnings.some((warning) => warning.code === "EVIDENCE_TRUNCATED"))) mismatch("metadata.truncated is inconsistent");
   return item;
+}
+function sourceLanguage(pathname) {
+  const extension = pathname.slice(pathname.lastIndexOf(".")).toLowerCase();
+  if (extension === ".rs") return "RUST";
+  if (extension === ".java") return "JAVA";
+  if (extension === ".ts" || extension === ".tsx") return "TYPESCRIPT";
+  if (extension === ".js" || extension === ".jsx") return "JAVASCRIPT";
+  return void 0;
+}
+function exactSkipCounts(left, right) {
+  const leftKeys = Object.keys(left).sort(compareUtf8);
+  const rightKeys = Object.keys(right).sort(compareUtf8);
+  return leftKeys.length === rightKeys.length && leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key]);
+}
+function validateImpactReportForRequest(report, request) {
+  const logicalRoot = request.source.logicalRoot;
+  if (logicalRoot !== ".") validatePortablePath(logicalRoot, "request.source.logicalRoot");
+  const submitted = /* @__PURE__ */ new Set();
+  const detected = /* @__PURE__ */ new Set();
+  let submittedBytes = 0;
+  for (const file of request.source.files) {
+    const portable2 = validatePortablePath(file.path, "request.source.files[].path");
+    if (logicalRoot !== "." && !portable2.startsWith(`${logicalRoot}/`)) {
+      mismatch("a submitted request file is outside source.logicalRoot");
+    }
+    if (submitted.has(portable2)) mismatch("the submitted inline manifest contains duplicate paths");
+    if (typeof file.content !== "string") mismatch("the submitted inline manifest contains non-text content");
+    const language = sourceLanguage(portable2);
+    if (!language) mismatch("the submitted inline manifest contains an unsupported source file");
+    submitted.add(portable2);
+    detected.add(language);
+    submittedBytes += Buffer.byteLength(file.content, "utf8");
+  }
+  if (submitted.size < 1 || submitted.size > 2e3 || submittedBytes > 16 * 1024 * 1024) {
+    mismatch("the submitted inline manifest exceeds the Standard profile");
+  }
+  const client = request.source.clientCollection;
+  if (client.filesSubmitted !== submitted.size) mismatch("submitted client accounting does not match the inline manifest");
+  const echoed = report.metadata.clientCollection;
+  if (!echoed) mismatch("metadata.clientCollection was omitted for an Action inline manifest");
+  for (const key of [
+    "entriesVisited",
+    "directoriesVisited",
+    "filesDiscovered",
+    "filesSubmitted",
+    "filesSkipped",
+    "collectionDurationMs"
+  ]) {
+    if (echoed[key] !== client[key]) mismatch("metadata.clientCollection does not echo the submitted accounting");
+  }
+  if (echoed.schemaVersion !== CLIENT_COLLECTION_SCHEMA_VERSION || echoed.authoritative !== false || !echoed.skipCounts || typeof echoed.skipCounts !== "object" || Array.isArray(echoed.skipCounts) || !exactSkipCounts(client.skipCounts, echoed.skipCounts)) {
+    mismatch("metadata.clientCollection does not echo the submitted skip accounting");
+  }
+  const server = report.metadata.serverScan;
+  if (server.inputType !== "INLINE_MANIFEST" || server.authoritative !== true || server.manifestEntriesSubmitted !== submitted.size || server.filesAccepted !== submitted.size || server.filesScanned !== submitted.size || server.filesSkipped !== 0 || server.bytesScanned !== submittedBytes) {
+    mismatch("metadata.serverScan does not reconcile with the submitted inline manifest");
+  }
+  const serverSkipCounts = server.skipCounts;
+  if (!serverSkipCounts || typeof serverSkipCounts !== "object" || Array.isArray(serverSkipCounts) || Object.values(serverSkipCounts).some((value) => value !== 0)) {
+    mismatch("metadata.serverScan reported skipped entries for the admitted inline manifest");
+  }
+  const expectedLanguages = SOURCE_LANGUAGES.filter((language) => detected.has(language));
+  if (report.metadata.languagesDetected.length !== expectedLanguages.length || report.metadata.languagesDetected.some((language, index) => language !== expectedLanguages[index])) {
+    mismatch("metadata.languagesDetected does not match the submitted inline manifest");
+  }
+  if (report.affectedFiles > submitted.size) mismatch("affectedFiles exceeds the submitted inline manifest");
+  for (const change of report.changes) {
+    if (change.affectedFileCount > submitted.size || change.highConfidenceFileCount > submitted.size) {
+      mismatch("change affected-file counts exceed the submitted inline manifest");
+    }
+    for (const source of change.affectedSources) {
+      if (!submitted.has(source.file)) mismatch("an affected source path was not submitted by this Action invocation");
+    }
+  }
+  for (const warning of report.metadata.warnings) {
+    if (warning.path !== void 0 && !submitted.has(warning.path)) {
+      mismatch("a warning path was not submitted by this Action invocation");
+    }
+  }
+  return report;
 }
 
 // src/impact/platform-client.ts
 var MAX_REQUEST_BYTES = 24 * 1024 * 1024;
 var MAX_ERROR_BYTES = 64 * 1024;
-var RETRYABLE_CODES = /* @__PURE__ */ new Set(["impact_analysis_busy", "impact_storage_unavailable"]);
 function validateProjectId(value) {
   const projectId = value.trim();
   if (!/^cgprj_[0-9a-f]{32}$/u.test(projectId)) {
@@ -1327,7 +1578,23 @@ function validateApiUrl(value) {
 function endpoint(options) {
   return `${options.apiUrl}/api/v1/contract-guard/projects/${encodeURIComponent(options.projectId)}/checks/${encodeURIComponent(options.checkId)}/impact`;
 }
-async function readBoundedBytes(response, maximumBytes) {
+function deadlineExceeded() {
+  return new ImpactActionError("action_deadline_exceeded", "Alconite Impact exceeded the overall Action deadline.");
+}
+async function readWithDeadline(reader, signal) {
+  if (signal.aborted) throw deadlineExceeded();
+  let onAbort;
+  const aborted = new Promise((_resolve, reject) => {
+    onAbort = () => reject(deadlineExceeded());
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([reader.read(), aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+}
+async function readBoundedBytes(response, maximumBytes, deadline) {
   const declaredRaw = response.headers.get("content-length");
   if (declaredRaw && /^\d+$/u.test(declaredRaw) && Number(declaredRaw) > maximumBytes) {
     await response.body?.cancel().catch(() => void 0);
@@ -1337,11 +1604,29 @@ async function readBoundedBytes(response, maximumBytes) {
     throw new ImpactActionError("platform_contract_mismatch", "Alconite returned an empty Impact response.", { status: response.status });
   }
   const reader = response.body.getReader();
+  const deadlineSignal = deadline.signal();
   const chunks = [];
   let total = 0;
   while (true) {
-    const { done, value } = await reader.read();
+    let result;
+    try {
+      result = await readWithDeadline(reader, deadlineSignal);
+    } catch (error2) {
+      void reader.cancel().catch(() => void 0);
+      if (error2 instanceof ImpactActionError && error2.code === "action_deadline_exceeded") throw error2;
+      try {
+        deadline.throwIfExpired();
+      } catch (deadlineError) {
+        throw deadlineError;
+      }
+      if (error2 instanceof DOMException && (error2.name === "AbortError" || error2.name === "TimeoutError")) {
+        throw deadlineExceeded();
+      }
+      throw error2;
+    }
+    const { done, value } = result;
     if (done) break;
+    deadline.throwIfExpired();
     total += value.byteLength;
     if (total > maximumBytes) {
       await reader.cancel().catch(() => void 0);
@@ -1357,8 +1642,8 @@ async function readBoundedBytes(response, maximumBytes) {
   }
   return bytes;
 }
-async function readBoundedJson(response, maximumBytes) {
-  const bytes = await readBoundedBytes(response, maximumBytes);
+async function readBoundedJson(response, maximumBytes, deadline) {
+  const bytes = await readBoundedBytes(response, maximumBytes, deadline);
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch (error2) {
@@ -1446,9 +1731,12 @@ var ImpactPlatformClient = class {
             status: response.status
           });
         }
-        const raw = await readBoundedJson(response, MAX_REPORT_BYTES);
+        const raw = await readBoundedJson(response, MAX_REPORT_BYTES, this.options.deadline);
         this.options.deadline.throwIfExpired();
-        const report = validateImpactReport(raw, this.options.projectId, this.options.checkId);
+        const report = validateImpactReportForRequest(
+          validateImpactReport(raw, this.options.projectId, this.options.checkId),
+          request
+        );
         this.options.deadline.throwIfExpired();
         return report;
       }
@@ -1459,13 +1747,14 @@ var ImpactPlatformClient = class {
       }
       let rawError;
       try {
-        rawError = await readBoundedJson(response, MAX_ERROR_BYTES);
-      } catch {
+        rawError = await readBoundedJson(response, MAX_ERROR_BYTES, this.options.deadline);
+      } catch (error2) {
+        if (error2 instanceof ImpactActionError && error2.code === "action_deadline_exceeded") throw error2;
         rawError = void 0;
       }
       const envelope = errorEnvelope(rawError);
       const retryableGateway = response.status === 504 && !envelope;
-      const retryableCode = envelope ? RETRYABLE_CODES.has(envelope.code) : false;
+      const retryableCode = envelope !== void 0 && (response.status === 429 && envelope.code === "impact_analysis_busy" || response.status === 503 && envelope.code === "impact_storage_unavailable");
       if ((retryableGateway || retryableCode) && attempt < this.options.attempts) {
         await this.options.deadline.wait(retryAfterMilliseconds(response.headers.get("retry-after")) ?? backoff(attempt));
         continue;
@@ -1507,6 +1796,17 @@ function sameIdentity(left, right) {
 }
 function sameFilesystemObject(left, right) {
   return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.nlink === right.nlink;
+}
+function sameReportDirectoryObject(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode;
+}
+function assertSupportedActionPlatform(platform = process.platform) {
+  if (platform !== "linux" || typeof import_node_fs2.constants.O_NOFOLLOW !== "number" || typeof import_node_fs2.constants.O_DIRECTORY !== "number") {
+    throw new ImpactActionError(
+      "unsupported_secure_source_filesystem",
+      "Secure Alconite Impact execution requires a Linux runner with descriptor-relative no-follow filesystem support."
+    );
+  }
 }
 function samePath(left, right) {
   const normalize = (value) => process.platform === "win32" ? value.toLowerCase() : value;
@@ -1562,7 +1862,7 @@ async function assertDirectoryIdentity(directory, purpose) {
   const stats = await lstatBigInt(directory.path);
   const realPath = await import_node_fs2.promises.realpath(directory.path);
   const current = stableIdentity(stats, purpose);
-  const unchanged = purpose === "report" ? sameFilesystemObject(directory.identity, current) : sameIdentity(directory.identity, current);
+  const unchanged = purpose === "report" ? sameReportDirectoryObject(directory.identity, current) : sameIdentity(directory.identity, current);
   if (!stats.isDirectory() || stats.isSymbolicLink() || !unchanged || !samePath(realPath, directory.realPath)) {
     throw new ImpactActionError(
       purpose === "report" ? "unsupported_secure_report_filesystem" : "source_race_detected",
@@ -1695,30 +1995,87 @@ function shouldFailRisk(risk, threshold) {
 function fileIdentity(stats) {
   return stableIdentity(stats, "report");
 }
-async function safeFailureCleanup(root, directory, filename, identity) {
-  try {
-    await assertDirectoryIdentity(root, "report");
-    if (filename && identity) {
-      const stats = await import_node_fs3.promises.lstat(filename, { bigint: true });
-      if (stats.isFile() && !stats.isSymbolicLink() && stats.nlink === 1n && sameIdentity(identity, fileIdentity(stats))) {
-        await import_node_fs3.promises.unlink(filename);
+async function safeFailureCleanup(root, rootHandle, directory, directoryHandle, directoryName, anchoredFilename, identity) {
+  if (directoryHandle && anchoredFilename && identity) {
+    try {
+      const stats = await import_node_fs3.promises.lstat(anchoredFilename, { bigint: true });
+      if (stats.isFile() && !stats.isSymbolicLink() && stats.nlink === 1n && sameFilesystemObject(identity, fileIdentity(stats))) {
+        await import_node_fs3.promises.unlink(anchoredFilename);
       }
+    } catch {
     }
-    if (directory) {
-      await assertDirectoryIdentity(directory, "report");
-      if ((await import_node_fs3.promises.readdir(directory.path)).length === 0) await import_node_fs3.promises.rmdir(directory.path);
-    }
-  } catch {
   }
+  if (rootHandle && directory && directoryHandle && directoryName) {
+    try {
+      await assertReportDirectoryHandle(rootHandle, root.identity, "runner temporary root");
+      await assertDirectoryIdentity(root, "report");
+      await assertReportDirectoryHandle(directoryHandle, directory.identity, "private report directory");
+      const anchoredDirectory = descriptorChild(rootHandle, directoryName);
+      const pathStats = await import_node_fs3.promises.lstat(anchoredDirectory, { bigint: true });
+      if (!pathStats.isDirectory() || pathStats.isSymbolicLink() || !sameReportDirectoryObject(directory.identity, fileIdentity(pathStats))) return;
+      if ((await import_node_fs3.promises.readdir(descriptorPath(directoryHandle))).length !== 0) return;
+      await assertDirectoryIdentity(directory, "report");
+      await import_node_fs3.promises.rmdir(anchoredDirectory);
+    } catch {
+    }
+  }
+}
+function reportDirectoryFlags() {
+  if (process.platform !== "linux" || typeof import_node_fs3.constants.O_NOFOLLOW !== "number" || typeof import_node_fs3.constants.O_DIRECTORY !== "number") {
+    throw new ImpactActionError(
+      "unsupported_secure_report_filesystem",
+      "Secure Impact report creation requires Linux descriptor-relative no-follow filesystem support."
+    );
+  }
+  return import_node_fs3.constants.O_RDONLY | import_node_fs3.constants.O_NOFOLLOW | import_node_fs3.constants.O_DIRECTORY;
+}
+function descriptorPath(handle) {
+  return `/proc/self/fd/${handle.fd}`;
+}
+function descriptorChild(handle, child) {
+  return `${descriptorPath(handle)}/${child}`;
+}
+async function assertReportDirectoryHandle(handle, identity, label) {
+  const stats = await handle.stat({ bigint: true });
+  if (!stats.isDirectory() || !sameReportDirectoryObject(identity, fileIdentity(stats))) {
+    throw new ImpactActionError("unsupported_secure_report_filesystem", `The verified ${label} changed during report creation.`);
+  }
+}
+async function openReportDirectory(directory, label) {
+  let handle;
+  try {
+    handle = await import_node_fs3.promises.open(directory.path, reportDirectoryFlags());
+  } catch (error2) {
+    throw new ImpactActionError(
+      "unsupported_secure_report_filesystem",
+      `The ${label} could not be opened with descriptor-relative no-follow semantics.`,
+      { cause: error2 }
+    );
+  }
+  try {
+    await assertReportDirectoryHandle(handle, directory.identity, label);
+    const throughDescriptor = await import_node_fs3.promises.stat(descriptorPath(handle), { bigint: true });
+    if (!throughDescriptor.isDirectory() || !sameReportDirectoryObject(directory.identity, fileIdentity(throughDescriptor))) {
+      throw new ImpactActionError(
+        "unsupported_secure_report_filesystem",
+        `The ${label} cannot be addressed safely through /proc/self/fd.`
+      );
+    }
+    return handle;
+  } catch (error2) {
+    await handle.close().catch(() => void 0);
+    throw error2;
+  }
+}
+async function assertBoundReportDirectory(root, rootHandle, directory, directoryHandle) {
+  await assertReportDirectoryHandle(rootHandle, root.identity, "runner temporary root");
+  await assertDirectoryIdentity(root, "report");
+  await assertReportDirectoryHandle(directoryHandle, directory.identity, "private report directory");
+  await assertDirectoryIdentity(directory, "report");
 }
 async function writePrivateReport(report, runnerTemp, workspacePath, deadline, hooks = {}) {
   deadline.throwIfExpired();
-  if (process.platform === "win32") {
-    throw new ImpactActionError(
-      "unsupported_secure_report_filesystem",
-      "Secure Impact report creation is unavailable on this Windows Node filesystem; use a supported Linux runner."
-    );
-  }
+  reportDirectoryFlags();
   const workspace = await verifyAbsoluteDirectory(workspacePath, "source", deadline);
   const root = await verifyAbsoluteDirectory(runnerTemp, "report", deadline);
   if (isContained(workspace.realPath, root.realPath)) {
@@ -1729,25 +2086,47 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
 `, "utf8");
   deadline.throwIfExpired();
   let directory;
+  let directoryName;
   let filename;
+  let anchoredFilename;
   let createdIdentity;
   let handle;
+  let rootHandle;
+  let directoryHandle;
   try {
-    const createdPath = await import_node_fs3.promises.mkdtemp(import_node_path2.default.join(root.path, "alconite-impact-"));
-    await import_node_fs3.promises.chmod(createdPath, 448);
-    directory = await verifyAbsoluteDirectory(createdPath, "report", deadline);
-    const directoryStats = await import_node_fs3.promises.lstat(directory.path, { bigint: true });
-    if ((Number(directoryStats.mode) & 511) !== 448 || !isContained(root.realPath, directory.realPath, false)) {
+    rootHandle = await openReportDirectory(root, "runner temporary root");
+    const createdDescriptorPath = await import_node_fs3.promises.mkdtemp(descriptorChild(rootHandle, "alconite-impact-")).catch((error2) => {
+      throw new ImpactActionError(
+        "unsupported_secure_report_filesystem",
+        "The runner does not support descriptor-anchored private directory creation through /proc/self/fd.",
+        { cause: error2 }
+      );
+    });
+    directoryName = import_node_path2.default.basename(createdDescriptorPath);
+    const createdPath = import_node_path2.default.join(root.path, directoryName);
+    await import_node_fs3.promises.chmod(createdDescriptorPath, 448);
+    const descriptorStats = await import_node_fs3.promises.lstat(createdDescriptorPath, { bigint: true });
+    const ambientStats = await import_node_fs3.promises.lstat(createdPath, { bigint: true });
+    if (!descriptorStats.isDirectory() || descriptorStats.isSymbolicLink() || !ambientStats.isDirectory() || ambientStats.isSymbolicLink()) {
+      throw new ImpactActionError("unsupported_secure_report_filesystem", "The private Impact report directory is not a regular directory.");
+    }
+    const childIdentity = fileIdentity(descriptorStats);
+    if (!sameReportDirectoryObject(childIdentity, fileIdentity(ambientStats))) {
+      throw new ImpactActionError("unsupported_secure_report_filesystem", "The private Impact report directory path changed during creation.");
+    }
+    const directoryRealPath = await import_node_fs3.promises.realpath(createdPath);
+    directory = { path: createdPath, realPath: directoryRealPath, identity: childIdentity };
+    directoryHandle = await openReportDirectory(directory, "private report directory");
+    if ((Number(descriptorStats.mode) & 511) !== 448 || !isContained(root.realPath, directory.realPath, false)) {
       throw new ImpactActionError("unsupported_secure_report_filesystem", "The private Impact report directory failed mode or containment verification.");
     }
-    await assertDirectoryIdentity(root, "report");
+    await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);
     await hooks.afterDirectoryCreated?.(directory.path);
+    await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);
     filename = import_node_path2.default.join(directory.path, "impact-report.json");
-    if (typeof import_node_fs3.constants.O_NOFOLLOW !== "number") {
-      throw new ImpactActionError("unsupported_secure_report_filesystem", "The runner does not expose O_NOFOLLOW for private report creation.");
-    }
+    anchoredFilename = descriptorChild(directoryHandle, "impact-report.json");
     handle = await import_node_fs3.promises.open(
-      filename,
+      anchoredFilename,
       import_node_fs3.constants.O_CREAT | import_node_fs3.constants.O_EXCL | import_node_fs3.constants.O_NOFOLLOW | import_node_fs3.constants.O_WRONLY,
       384
     );
@@ -1758,6 +2137,11 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
       throw new ImpactActionError("unsupported_secure_report_filesystem", "The private Impact report file mode could not be enforced.");
     }
     await hooks.afterFileCreated?.(filename);
+    await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);
+    const anchoredBeforeWrite = await import_node_fs3.promises.lstat(anchoredFilename, { bigint: true });
+    if (!anchoredBeforeWrite.isFile() || anchoredBeforeWrite.isSymbolicLink() || anchoredBeforeWrite.nlink !== 1n || !sameIdentity(createdIdentity, fileIdentity(anchoredBeforeWrite))) {
+      throw new ImpactActionError("report_write_failed", "The private Impact report path changed before it was written.");
+    }
     await handle.writeFile(bytes);
     await handle.sync();
     deadline.throwIfExpired();
@@ -1769,19 +2153,22 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
     createdIdentity = afterWriteIdentity;
     await handle.close();
     handle = void 0;
+    const anchoredStats = await import_node_fs3.promises.lstat(anchoredFilename, { bigint: true });
     const pathStats = await import_node_fs3.promises.lstat(filename, { bigint: true });
     const finalPath = await import_node_fs3.promises.realpath(filename);
-    if (!pathStats.isFile() || pathStats.isSymbolicLink() || pathStats.nlink !== 1n || !sameIdentity(createdIdentity, fileIdentity(pathStats)) || !isContained(directory.realPath, finalPath, false)) {
+    if (!anchoredStats.isFile() || anchoredStats.isSymbolicLink() || anchoredStats.nlink !== 1n || !sameIdentity(createdIdentity, fileIdentity(anchoredStats)) || !pathStats.isFile() || pathStats.isSymbolicLink() || pathStats.nlink !== 1n || !sameIdentity(createdIdentity, fileIdentity(pathStats)) || !isContained(directory.realPath, finalPath, false)) {
       throw new ImpactActionError("report_write_failed", "The private Impact report failed final identity verification.");
     }
-    await assertDirectoryIdentity(directory, "report");
-    await assertDirectoryIdentity(root, "report");
+    await assertBoundReportDirectory(root, rootHandle, directory, directoryHandle);
     return filename;
   } catch (error2) {
     await handle?.close().catch(() => void 0);
-    await safeFailureCleanup(root, directory, filename, createdIdentity);
+    await safeFailureCleanup(root, rootHandle, directory, directoryHandle, directoryName, anchoredFilename, createdIdentity);
     if (error2 instanceof ImpactActionError) throw error2;
     throw new ImpactActionError("report_write_failed", "The private Impact report could not be created securely.", { cause: error2 });
+  } finally {
+    await directoryHandle?.close().catch(() => void 0);
+    await rootHandle?.close().catch(() => void 0);
   }
 }
 function serverCounter(report, name) {
@@ -1892,19 +2279,17 @@ function complexity(message) {
   throw new ImpactActionError("collection_limit_exceeded", message);
 }
 function validatePortableRoot(value) {
-  const candidate = value.trim() || ".";
-  if (Buffer.byteLength(candidate, "utf8") > 512 || candidate.includes("\0") || candidate.includes("\\") || candidate.startsWith("/") || /^[A-Za-z]:/u.test(candidate)) {
+  const candidate = value.trim() === "" ? "." : value;
+  if (Buffer.byteLength(candidate, "utf8") > 512) {
     invalid("source-root must be a portable path relative to GITHUB_WORKSPACE");
   }
   if (candidate === ".") return candidate;
-  const components = candidate.split("/");
-  if (components.some((component) => !component || component === "." || component === "..")) {
+  if (!hasPortableRelativePathSyntax(candidate)) {
     invalid("source-root must contain only normalized path components below GITHUB_WORKSPACE");
   }
-  return components.join("/");
+  return candidate;
 }
 function validateAdditionalIgnorePatterns(patterns) {
-  if (patterns.length > 20) invalid("additional-ignore accepts at most 20 non-empty patterns");
   const result = [];
   for (const original of patterns) {
     const pattern = original.trim();
@@ -2106,6 +2491,9 @@ async function collectSourceManifest(options) {
       const absolute = import_node_path3.default.join(directory, entry.name);
       const relativeWorkspace = portable(workspace.path, absolute);
       const relativeSource = portable(root.path, absolute);
+      if (!hasPortableRelativePathSyntax(relativeWorkspace) || !hasPortableRelativePathSyntax(relativeSource)) {
+        invalid("The selected workspace contains a path that cannot be represented safely in an Impact manifest.");
+      }
       const depth = pathDepth(root.path, absolute);
       const pathTooLong = Buffer.byteLength(relativeWorkspace, "utf8") > limits.maximumPathBytes;
       const stats = await inspectEntry(absolute).catch((error2) => {
@@ -2254,6 +2642,7 @@ function assertClientAccountingEcho(expected, actual) {
 async function main() {
   const timeoutMs = boundedInteger(getInput("timeout-seconds"), "timeout-seconds", 1, 600) * 1e3;
   const deadline = new ActionDeadline(timeoutMs);
+  assertSupportedActionPlatform();
   const rawToken = getInput("project-token", { required: true });
   setSecret(rawToken);
   const projectToken = validateProjectToken(rawToken);

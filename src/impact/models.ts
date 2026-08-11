@@ -1,6 +1,11 @@
+import { hasPortableRelativePathSyntax } from './portable-path';
+
 export const IMPACT_REPORT_SCHEMA_VERSION = 'alconite.impact.report.v1' as const;
 export const CLIENT_COLLECTION_SCHEMA_VERSION = 'alconite.impact.client-collection.v1' as const;
 export const MAX_REPORT_BYTES = 8 * 1024 * 1024;
+const U32_MAX = 0xffff_ffff;
+const STANDARD_MAX_AFFECTED_LOCATIONS = 50_000;
+const STANDARD_MAX_AFFECTED_FILES = 2_000;
 
 export const RISK_VALUES = ['NONE', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
 export type ImpactRisk = (typeof RISK_VALUES)[number];
@@ -17,6 +22,7 @@ export const SKIP_CODES = [
   'BINARY_FILE',
   'INVALID_UTF8',
   'FILE_TOO_LARGE',
+  'FILE_READ_FAILED',
   'SYMLINK_OR_REPARSE',
   'PATH_TOO_LONG',
   'DEPTH_EXCEEDED',
@@ -200,8 +206,8 @@ export interface ImpactChange {
     evidenceTypes: ImpactEvidenceType[];
     criticalRisk: null | {
       destructiveRemoval: true;
-      requiredDistinctFiles: 10;
-      requiredHighConfidenceFiles: 5;
+      requiredDistinctFiles: number;
+      requiredHighConfidenceFiles: number;
       observedDistinctFiles: number;
       observedHighConfidenceFiles: number;
     };
@@ -265,16 +271,22 @@ export class ImpactContractError extends Error {
 }
 
 const HTTP_METHODS = new Set(['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE']);
-const CLASSIFICATIONS = new Set(['breaking', 'risky', 'non_breaking', 'informational']);
-const CATEGORIES = new Set([
+const CLASSIFICATION_VALUES = ['breaking', 'risky', 'non_breaking', 'informational'] as const;
+const CATEGORY_VALUES = [
   'operation', 'parameter', 'request_body', 'response', 'schema', 'security', 'server', 'media_type', 'metadata',
   'analyzer_regression', 'analyzer_resolution',
-]);
+] as const;
+const CLASSIFICATIONS = new Set<string>(CLASSIFICATION_VALUES);
+const CATEGORIES = new Set<string>(CATEGORY_VALUES);
 const RISK_SET = new Set<string>(RISK_VALUES);
 const CONFIDENCE_SET = new Set<string>(CONFIDENCE_VALUES);
 const LANGUAGE_SET = new Set<string>(SOURCE_LANGUAGES);
 const EVIDENCE_SET = new Set<string>(EVIDENCE_TYPES);
 const CONDITION_SET = new Set<string>(CONFIDENCE_CONDITIONS);
+const HIGH_CONFIDENCE_CONDITION_SET = new Set<string>([
+  'METHOD_PATH_CALL', 'MATCHING_TYPE_MEMBER', 'OWNED_ENUM', 'OWNED_PARAMETER', 'OPERATION_PATH_CALL',
+]);
+const MEDIUM_CONFIDENCE_CONDITION_SET = new Set<string>(['QUALIFIED_MEMBER', 'EXACT_CLIENT_METHOD', 'EXACT_TYPE']);
 const WARNING_SET = new Set<string>(WARNING_CODES);
 const CHANGE_KIND_SET = new Set<string>(CHANGE_KINDS);
 const SKIP_CODE_SET = new Set<string>(SKIP_CODES);
@@ -310,7 +322,7 @@ function nullableString(value: unknown, context: string, maximum: number): strin
   return value === null ? null : stringValue(value, context, 1, maximum);
 }
 
-function integer(value: unknown, context: string, minimum = 0, maximum = Number.MAX_SAFE_INTEGER): number {
+function integer(value: unknown, context: string, minimum = 0, maximum = U32_MAX): number {
   if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) {
     mismatch(`${context} must be a bounded integer`);
   }
@@ -332,16 +344,6 @@ function arrayValue(value: unknown, context: string, maximum: number): unknown[]
   return value;
 }
 
-function sortedUnique(values: readonly string[], context: string): void {
-  for (let index = 1; index < values.length; index += 1) {
-    const previous = values[index - 1];
-    const current = values[index];
-    if (previous === undefined || current === undefined || Buffer.compare(Buffer.from(previous), Buffer.from(current)) >= 0) {
-      mismatch(`${context} must be sorted and deduplicated`);
-    }
-  }
-}
-
 function compareUtf8(left: string, right: string): number {
   return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
 }
@@ -358,14 +360,7 @@ function canonicalUnique(values: readonly string[], canonical: readonly string[]
 
 function validatePortablePath(value: unknown, context: string): string {
   const candidate = byteString(value, context, 1, 512);
-  if (
-    candidate.includes('\\') || candidate.includes('\0') || candidate.startsWith('/') ||
-    /^[A-Za-z]:/u.test(candidate) || candidate.startsWith('//')
-  ) mismatch(`${context} is not a portable relative path`);
-  const components = candidate.split('/');
-  if (components.some((component) => !component || component === '.' || component === '..')) {
-    mismatch(`${context} is not a normalized portable path`);
-  }
+  if (!hasPortableRelativePathSyntax(candidate)) mismatch(`${context} is not a normalized portable path`);
   return candidate;
 }
 
@@ -493,10 +488,7 @@ function validateSubjectForKind(item: Record<string, unknown>, present: Readonly
     return requireExactSubject(present, ['schema', 'enumValue'], kind);
   }
   if (kind === 'SECURITY_REQUIREMENT_STRENGTHENED' || kind === 'SECURITY_REQUIREMENT_WEAKENED') {
-    if (!(present.size === 1 && present.has('operation')) && !(present.size === 2 && present.has('operation') && present.has('securityScheme'))) {
-      mismatch(`change.subject does not match ${kind}`);
-    }
-    return;
+    return requireExactSubject(present, ['operation'], kind);
   }
   if (kind === 'SECURITY_SCOPE_ADDED' || kind === 'SECURITY_SCOPE_REMOVED') {
     return requireExactSubject(present, ['operation', 'securityScope'], kind);
@@ -507,7 +499,10 @@ function validateSubjectForKind(item: Record<string, unknown>, present: Readonly
   if (kind === 'SERVER_ADDED' || kind === 'SERVER_REMOVED' || kind === 'METADATA_CHANGED') {
     return requireExactSubject(present, ['metadataPointer'], kind);
   }
-  // Analyzer regression/resolution deliberately accepts the richest available typed subject.
+  if (kind === 'ANALYZER_REGRESSION' || kind === 'ANALYZER_RESOLUTION') {
+    const analyzerShapes = ['operation', 'schema', 'metadataPointer'].filter((key) => present.has(key));
+    if (present.size !== 1 || analyzerShapes.length !== 1) mismatch(`change.subject does not match ${kind}`);
+  }
 }
 
 function validateEvidence(value: unknown): ImpactEvidence {
@@ -520,8 +515,8 @@ function validateEvidence(value: unknown): ImpactEvidence {
 function validateAffectedSource(value: unknown): AffectedSource {
   const item = record(value, 'affected source', ['file', 'line', 'column', 'language', 'confidence', 'evidence']);
   validatePortablePath(item.file, 'affected source.file');
-  integer(item.line, 'affected source.line', 1);
-  integer(item.column, 'affected source.column', 1);
+  integer(item.line, 'affected source.line', 1, U32_MAX);
+  integer(item.column, 'affected source.column', 1, U32_MAX);
   enumValue(item.language, 'affected source.language', LANGUAGE_SET);
   enumValue(item.confidence, 'affected source.confidence', CONFIDENCE_SET);
   const evidence = arrayValue(item.evidence, 'affected source.evidence', 12).map(validateEvidence);
@@ -543,6 +538,7 @@ function validateConfidenceBasis(
   risk: ImpactRisk,
   affectedFiles: number,
   highConfidenceFiles: number,
+  impactEngineVersion: number,
 ): void {
   const item = record(value, 'change.confidenceBasis', ['level', 'conditions', 'evidenceTypes', 'criticalRisk']);
   const level = item.level === null ? null : enumValue<ImpactConfidence>(item.level, 'change.confidenceBasis.level', CONFIDENCE_SET);
@@ -556,6 +552,15 @@ function validateConfidenceBasis(
   if (confidence === null && (conditions.length !== 0 || evidenceTypes.length !== 0 || item.criticalRisk !== null)) {
     mismatch('empty confidence must have an empty confidence basis');
   }
+  if (confidence !== null) {
+    if (evidenceTypes.length === 0) mismatch('non-empty confidence requires evidence types');
+    const computedLevel: ImpactConfidence = conditions.some((condition) => HIGH_CONFIDENCE_CONDITION_SET.has(condition))
+      ? 'HIGH'
+      : conditions.some((condition) => MEDIUM_CONFIDENCE_CONDITION_SET.has(condition)) || evidenceTypes.length >= 2
+        ? 'MEDIUM'
+        : 'LOW';
+    if (level !== computedLevel) mismatch('change.confidenceBasis.level disagrees with its v1 conditions and evidence types');
+  }
   if ((risk === 'CRITICAL') !== (item.criticalRisk !== null)) mismatch('criticalRisk basis disagrees with risk');
   if (item.criticalRisk !== null) {
     const critical = record(item.criticalRisk, 'change.confidenceBasis.criticalRisk', [
@@ -563,30 +568,89 @@ function validateConfidenceBasis(
       'observedHighConfidenceFiles',
     ]);
     if (critical.destructiveRemoval !== true) mismatch('criticalRisk.destructiveRemoval must be true');
-    integer(critical.requiredDistinctFiles, 'criticalRisk.requiredDistinctFiles', 10, 10);
-    integer(critical.requiredHighConfidenceFiles, 'criticalRisk.requiredHighConfidenceFiles', 5, 5);
-    const observedFiles = integer(critical.observedDistinctFiles, 'criticalRisk.observedDistinctFiles', 10);
-    const observedHighFiles = integer(critical.observedHighConfidenceFiles, 'criticalRisk.observedHighConfidenceFiles', 5);
-    if (observedFiles !== affectedFiles || observedHighFiles !== highConfidenceFiles) {
+    const requiredFiles = integer(critical.requiredDistinctFiles, 'criticalRisk.requiredDistinctFiles', 1, U32_MAX);
+    const requiredHighFiles = integer(critical.requiredHighConfidenceFiles, 'criticalRisk.requiredHighConfidenceFiles', 1, U32_MAX);
+    if (impactEngineVersion === 1 && (requiredFiles !== 10 || requiredHighFiles !== 5)) {
+      mismatch('criticalRisk thresholds disagree with Impact engine v1');
+    }
+    const observedFiles = integer(critical.observedDistinctFiles, 'criticalRisk.observedDistinctFiles', 1, U32_MAX);
+    const observedHighFiles = integer(critical.observedHighConfidenceFiles, 'criticalRisk.observedHighConfidenceFiles', 1, U32_MAX);
+    if (observedFiles !== affectedFiles || observedHighFiles !== highConfidenceFiles ||
+        observedFiles < requiredFiles || observedHighFiles < requiredHighFiles) {
       mismatch('criticalRisk observed counts disagree with affected-source counts');
     }
   }
 }
 
-function validateChange(value: unknown): ImpactChange {
+const DESTRUCTIVE_REMOVALS = new Set<ContractChangeKind>(['ENDPOINT_REMOVED', 'HTTP_METHOD_REMOVED', 'SCHEMA_REMOVED']);
+
+function expectedCategory(kind: ContractChangeKind): (typeof CATEGORY_VALUES)[number] {
+  switch (kind) {
+    case 'ENDPOINT_ADDED':
+    case 'ENDPOINT_REMOVED':
+    case 'HTTP_METHOD_ADDED':
+    case 'HTTP_METHOD_REMOVED': return 'operation';
+    case 'PARAMETER_ADDED':
+    case 'REQUIRED_PARAMETER_ADDED':
+    case 'PARAMETER_REMOVED':
+    case 'PARAMETER_TYPE_CHANGED':
+    case 'PARAMETER_REQUIREMENT_CHANGED':
+    case 'PARAMETER_CONSTRAINT_CHANGED':
+    case 'PARAMETER_ENUM_VALUE_ADDED':
+    case 'PARAMETER_ENUM_VALUE_REMOVED': return 'parameter';
+    case 'REQUEST_BODY_ADDED':
+    case 'REQUIRED_REQUEST_BODY_ADDED':
+    case 'REQUEST_BODY_REMOVED':
+    case 'REQUEST_BODY_REQUIREMENT_CHANGED':
+    case 'REQUEST_SCHEMA_CHANGED': return 'request_body';
+    case 'REQUEST_MEDIA_TYPE_ADDED':
+    case 'REQUEST_MEDIA_TYPE_REMOVED':
+    case 'RESPONSE_MEDIA_TYPE_ADDED':
+    case 'RESPONSE_MEDIA_TYPE_REMOVED': return 'media_type';
+    case 'RESPONSE_ADDED':
+    case 'RESPONSE_REMOVED':
+    case 'RESPONSE_SCHEMA_CHANGED': return 'response';
+    case 'SCHEMA_ADDED':
+    case 'SCHEMA_REMOVED':
+    case 'PROPERTY_ADDED':
+    case 'PROPERTY_REMOVED':
+    case 'PROPERTY_TYPE_CHANGED':
+    case 'PROPERTY_REQUIREMENT_CHANGED':
+    case 'PROPERTY_CONSTRAINT_CHANGED':
+    case 'REQUIRED_REQUEST_PROPERTY_ADDED':
+    case 'ENUM_VALUE_ADDED':
+    case 'ENUM_VALUE_REMOVED': return 'schema';
+    case 'OPERATION_ID_CHANGED':
+    case 'DEPRECATION_CHANGED':
+    case 'METADATA_CHANGED': return 'metadata';
+    case 'SECURITY_REQUIREMENT_STRENGTHENED':
+    case 'SECURITY_REQUIREMENT_WEAKENED':
+    case 'SECURITY_SCHEME_ADDED':
+    case 'SECURITY_SCHEME_REMOVED':
+    case 'SECURITY_SCOPE_ADDED':
+    case 'SECURITY_SCOPE_REMOVED': return 'security';
+    case 'SERVER_ADDED':
+    case 'SERVER_REMOVED': return 'server';
+    case 'ANALYZER_REGRESSION': return 'analyzer_regression';
+    case 'ANALYZER_RESOLUTION': return 'analyzer_resolution';
+  }
+}
+
+function validateChange(value: unknown, impactEngineVersion: number): ImpactChange {
   const item = record(value, 'change', [
     'id', 'deltaFingerprint', 'kind', 'classification', 'category', 'ruleId', 'ruleVersion', 'summary', 'explanation',
     'baselineValue', 'candidateValue', 'subject', 'potentialRisk', 'risk', 'confidence', 'confidenceBasis',
     'affectedLocationCount', 'returnedAffectedLocationCount', 'omittedAffectedLocationCount', 'affectedFileCount',
     'highConfidenceFileCount', 'affectedSources', 'recommendation',
   ]);
-  if (typeof item.id !== 'string' || !/^cgdelta_[a-f0-9]{32}$/u.test(item.id)) mismatch('change.id is invalid');
   if (typeof item.deltaFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(item.deltaFingerprint)) mismatch('change.deltaFingerprint is invalid');
+  if (item.id !== `cgdelta_${item.deltaFingerprint.slice(0, 32)}`) mismatch('change.id does not match its delta fingerprint');
   const kind = enumValue<ContractChangeKind>(item.kind, 'change.kind', CHANGE_KIND_SET);
   enumValue(item.classification, 'change.classification', CLASSIFICATIONS);
-  enumValue(item.category, 'change.category', CATEGORIES);
+  const category = enumValue<(typeof CATEGORY_VALUES)[number]>(item.category, 'change.category', CATEGORIES);
+  if (category !== expectedCategory(kind)) mismatch('change.category does not match its semantic kind');
   byteString(item.ruleId, 'change.ruleId', 1, 64);
-  integer(item.ruleVersion, 'change.ruleVersion', 1);
+  integer(item.ruleVersion, 'change.ruleVersion', 1, U32_MAX);
   stringValue(item.summary, 'change.summary', 1, 200);
   stringValue(item.explanation, 'change.explanation', 1, 1_000);
   if (item.baselineValue !== null) stringValue(item.baselineValue, 'change.baselineValue', 0, 500);
@@ -595,12 +659,12 @@ function validateChange(value: unknown): ImpactChange {
   const potentialRisk = enumValue<ImpactRisk>(item.potentialRisk, 'change.potentialRisk', RISK_SET);
   const risk = enumValue<ImpactRisk>(item.risk, 'change.risk', RISK_SET);
   const confidence = item.confidence === null ? null : enumValue<ImpactConfidence>(item.confidence, 'change.confidence', CONFIDENCE_SET);
-  const total = integer(item.affectedLocationCount, 'change.affectedLocationCount');
-  const returned = integer(item.returnedAffectedLocationCount, 'change.returnedAffectedLocationCount');
-  const omitted = integer(item.omittedAffectedLocationCount, 'change.omittedAffectedLocationCount');
-  const files = integer(item.affectedFileCount, 'change.affectedFileCount');
-  const highFiles = integer(item.highConfidenceFileCount, 'change.highConfidenceFileCount');
-  validateConfidenceBasis(item.confidenceBasis, confidence, risk, files, highFiles);
+  const total = integer(item.affectedLocationCount, 'change.affectedLocationCount', 0, STANDARD_MAX_AFFECTED_LOCATIONS);
+  const returned = integer(item.returnedAffectedLocationCount, 'change.returnedAffectedLocationCount', 0, 200);
+  const omitted = integer(item.omittedAffectedLocationCount, 'change.omittedAffectedLocationCount', 0, STANDARD_MAX_AFFECTED_LOCATIONS);
+  const files = integer(item.affectedFileCount, 'change.affectedFileCount', 0, STANDARD_MAX_AFFECTED_FILES);
+  const highFiles = integer(item.highConfidenceFileCount, 'change.highConfidenceFileCount', 0, STANDARD_MAX_AFFECTED_FILES);
+  validateConfidenceBasis(item.confidenceBasis, confidence, risk, files, highFiles, impactEngineVersion);
   const sources = arrayValue(item.affectedSources, 'change.affectedSources', 200).map(validateAffectedSource);
   for (let index = 1; index < sources.length; index += 1) {
     const left = sources[index - 1];
@@ -618,6 +682,11 @@ function validateChange(value: unknown): ImpactChange {
     mismatch('change confidence/risk does not match its affected-source count');
   }
   if (total > 0 && potentialRisk === 'NONE') mismatch('an affected change cannot have NONE potential risk');
+  if (total > 0) {
+    const criticalElevation = risk === 'CRITICAL' && potentialRisk === 'HIGH' && DESTRUCTIVE_REMOVALS.has(kind);
+    if (risk === 'CRITICAL' && !criticalElevation) mismatch('change Critical risk is not a valid destructive-removal elevation');
+    if (risk !== potentialRisk && !criticalElevation) mismatch('change risk does not match its potential risk');
+  }
   const recommendation = record(item.recommendation, 'change.recommendation', ['code', 'message']);
   if (typeof recommendation.code !== 'string' || !/^[a-z][a-z0-9_]{0,99}$/u.test(recommendation.code)) {
     mismatch('change.recommendation.code is invalid');
@@ -626,6 +695,60 @@ function validateChange(value: unknown): ImpactChange {
   const compactRow = { ...item, affectedSources: [] };
   if (Buffer.byteLength(JSON.stringify(compactRow), 'utf8') > 6_144) mismatch('change compact row exceeds its bound');
   return item as unknown as ImpactChange;
+}
+
+function compareOptionalString(left: string | null, right: string | null): number {
+  if (left === null) return right === null ? 0 : -1;
+  if (right === null) return 1;
+  return compareUtf8(left, right);
+}
+
+function compareOptionalObject<T>(left: T | null, right: T | null, compare: (a: T, b: T) => number): number {
+  if (left === null) return right === null ? 0 : -1;
+  if (right === null) return 1;
+  return compare(left, right);
+}
+
+function compareSubject(left: ChangeSubject, right: ChangeSubject): number {
+  const operation = compareOptionalObject(left.operation, right.operation, (a, b) =>
+    compareUtf8(a.path, b.path) || compareUtf8(a.method, b.method) ||
+    compareOptionalString(a.baselineOperationId, b.baselineOperationId) ||
+    compareOptionalString(a.candidateOperationId, b.candidateOperationId));
+  if (operation !== 0) return operation;
+  const schema = compareOptionalObject(left.schema, right.schema, (a, b) => {
+    const identity = compareUtf8(a.name, b.name) || compareOptionalString(a.property, b.property);
+    if (identity !== 0) return identity;
+    const usesOrder = ['REQUEST', 'RESPONSE', 'UNKNOWN'] as const;
+    const length = Math.min(a.uses.length, b.uses.length);
+    for (let index = 0; index < length; index += 1) {
+      const aUse = a.uses[index];
+      const bUse = b.uses[index];
+      if (!aUse || !bUse) return a.uses.length - b.uses.length;
+      const comparison = usesOrder.indexOf(aUse) - usesOrder.indexOf(bUse);
+      if (comparison !== 0) return comparison;
+    }
+    return a.uses.length - b.uses.length;
+  });
+  if (schema !== 0) return schema;
+  const locations = ['PATH', 'QUERY', 'HEADER', 'COOKIE'] as const;
+  const parameter = compareOptionalObject(left.parameter, right.parameter, (a, b) =>
+    compareUtf8(a.name, b.name) || locations.indexOf(a.location) - locations.indexOf(b.location));
+  if (parameter !== 0) return parameter;
+  return compareOptionalString(left.responseStatus, right.responseStatus) ||
+    compareOptionalString(left.mediaType, right.mediaType) ||
+    compareOptionalString(left.enumValue, right.enumValue) ||
+    compareOptionalString(left.securityScheme, right.securityScheme) ||
+    compareOptionalString(left.securityScope, right.securityScope) ||
+    compareOptionalString(left.metadataPointer, right.metadataPointer);
+}
+
+function compareChanges(left: ImpactChange, right: ImpactChange): number {
+  return CLASSIFICATION_VALUES.indexOf(left.classification) - CLASSIFICATION_VALUES.indexOf(right.classification) ||
+    CATEGORY_VALUES.indexOf(left.category as (typeof CATEGORY_VALUES)[number]) -
+      CATEGORY_VALUES.indexOf(right.category as (typeof CATEGORY_VALUES)[number]) ||
+    compareSubject(left.subject, right.subject) ||
+    CHANGE_KINDS.indexOf(left.kind) - CHANGE_KINDS.indexOf(right.kind) ||
+    compareUtf8(left.deltaFingerprint, right.deltaFingerprint);
 }
 
 function validateServerScan(value: unknown): void {
@@ -668,11 +791,12 @@ function validateServerScan(value: unknown): void {
   }
 }
 
-function validateWarning(value: unknown): void {
+function validateWarning(value: unknown): { code: string; message: string; path?: string } {
   const item = record(value, 'metadata warning', ['code', 'message'], ['path']);
   enumValue(item.code, 'metadata warning.code', WARNING_SET);
   stringValue(item.message, 'metadata warning.message', 1, 200);
   if ('path' in item) validatePortablePath(item.path, 'metadata warning.path');
+  return item as { code: string; message: string; path?: string };
 }
 
 function validateContract(value: unknown, expectedProjectId: string, expectedCheckId: string): void {
@@ -695,7 +819,7 @@ function validateContract(value: unknown, expectedProjectId: string, expectedChe
   }
 }
 
-function validateEngines(value: unknown): void {
+function validateEngines(value: unknown): number {
   const item = record(value, 'engines', [
     'analyzerVersion', 'analyzerRuleSetVersion', 'analyzerCompatibilityVersion', 'legacyComparisonEngineVersion',
     'contractDeltaEngineVersion', 'impactAnalysisEngineVersion',
@@ -704,7 +828,8 @@ function validateEngines(value: unknown): void {
   for (const key of [
     'analyzerRuleSetVersion', 'analyzerCompatibilityVersion', 'legacyComparisonEngineVersion',
     'contractDeltaEngineVersion', 'impactAnalysisEngineVersion',
-  ]) integer(item[key], `engines.${key}`, 1);
+  ]) integer(item[key], `engines.${key}`, 1, U32_MAX);
+  return item.impactAnalysisEngineVersion as number;
 }
 
 export function validateImpactReport(value: unknown, expectedProjectId: string, expectedCheckId: string): ImpactReport {
@@ -717,18 +842,30 @@ export function validateImpactReport(value: unknown, expectedProjectId: string, 
     mismatch('analysisFingerprint is invalid');
   }
   validateContract(item.contract, expectedProjectId, expectedCheckId);
-  validateEngines(item.engines);
+  const impactEngineVersion = validateEngines(item.engines);
   const overallRisk = enumValue<ImpactRisk>(item.overallRisk, 'overallRisk', RISK_SET);
   const overallPotentialRisk = enumValue<ImpactRisk>(item.overallPotentialRisk, 'overallPotentialRisk', RISK_SET);
-  const breaking = integer(item.breakingChanges, 'breakingChanges');
-  const affectedFiles = integer(item.affectedFiles, 'affectedFiles');
-  const affectedLocations = integer(item.affectedSourceLocations, 'affectedSourceLocations');
-  const changes = arrayValue(item.changes, 'changes', 1_000).map(validateChange);
+  const breaking = integer(item.breakingChanges, 'breakingChanges', 0, 1_000);
+  const affectedFiles = integer(item.affectedFiles, 'affectedFiles', 0, STANDARD_MAX_AFFECTED_FILES);
+  const affectedLocations = integer(
+    item.affectedSourceLocations,
+    'affectedSourceLocations',
+    0,
+    STANDARD_MAX_AFFECTED_LOCATIONS,
+  );
+  const changes = arrayValue(item.changes, 'changes', 1_000).map((change) => validateChange(change, impactEngineVersion));
   if (new Set(changes.map((change) => change.id)).size !== changes.length ||
       new Set(changes.map((change) => change.deltaFingerprint)).size !== changes.length) {
     mismatch('changes must have unique identities');
   }
+  for (let index = 1; index < changes.length; index += 1) {
+    const left = changes[index - 1];
+    const right = changes[index];
+    if (!left || !right || compareChanges(left, right) >= 0) mismatch('changes must use canonical Contract Delta ordering');
+  }
   if (changes.filter((change) => change.classification === 'breaking').length !== breaking) mismatch('breakingChanges is inconsistent');
+  const completeLocations = changes.reduce((total, change) => total + change.affectedLocationCount, 0);
+  if (affectedLocations !== completeLocations) mismatch('affectedSourceLocations is inconsistent with its complete change counts');
   const riskRank = (risk: ImpactRisk): number => RISK_VALUES.indexOf(risk);
   const expectedRisk = changes.reduce<ImpactRisk>((maximum, change) => riskRank(change.risk) > riskRank(maximum) ? change.risk : maximum, 'NONE');
   const expectedPotential = changes.reduce<ImpactRisk>((maximum, change) =>
@@ -749,27 +886,123 @@ export function validateImpactReport(value: unknown, expectedProjectId: string, 
   const languages = arrayValue(metadata.languagesDetected, 'metadata.languagesDetected', SOURCE_LANGUAGES.length)
     .map((entry) => enumValue<string>(entry, 'metadata.languagesDetected[]', LANGUAGE_SET));
   canonicalUnique(languages, SOURCE_LANGUAGES, 'metadata.languagesDetected');
-  const warnings = arrayValue(metadata.warnings, 'metadata.warnings', 200);
-  warnings.forEach(validateWarning);
-  const warningKeys = warnings.map((warning) => {
-    const item = warning as { code: string; path?: string };
-    return `${item.code}\0${item.path ?? ''}`;
-  });
-  sortedUnique(warningKeys, 'metadata.warnings');
-  const warningsOmitted = integer(metadata.warningsOmitted, 'metadata.warningsOmitted');
+  const warnings = arrayValue(metadata.warnings, 'metadata.warnings', 200).map(validateWarning);
+  for (let index = 1; index < warnings.length; index += 1) {
+    const left = warnings[index - 1];
+    const right = warnings[index];
+    if (!left || !right) mismatch('metadata.warnings ordering is invalid');
+    const pathComparison = left.path === undefined
+      ? (right.path === undefined ? 0 : -1)
+      : (right.path === undefined ? 1 : compareUtf8(left.path, right.path));
+    const comparison = compareUtf8(left.code, right.code) || pathComparison || compareUtf8(left.message, right.message);
+    if (comparison >= 0) mismatch('metadata.warnings must be sorted and deduplicated by code, path, and message');
+  }
+  const warningsOmitted = integer(metadata.warningsOmitted, 'metadata.warningsOmitted', 0, U32_MAX);
   const truncated = booleanValue(metadata.truncated, 'metadata.truncated');
-  const total = integer(metadata.totalAffectedSourceLocations, 'metadata.totalAffectedSourceLocations');
-  const returned = integer(metadata.returnedAffectedSourceLocations, 'metadata.returnedAffectedSourceLocations');
-  const changesWithout = integer(metadata.changesWithoutReturnedLocations, 'metadata.changesWithoutReturnedLocations');
-  integer(metadata.analysisDurationMs, 'metadata.analysisDurationMs');
+  const total = integer(
+    metadata.totalAffectedSourceLocations,
+    'metadata.totalAffectedSourceLocations',
+    0,
+    STANDARD_MAX_AFFECTED_LOCATIONS,
+  );
+  const returned = integer(metadata.returnedAffectedSourceLocations, 'metadata.returnedAffectedSourceLocations', 0, 5_000);
+  const changesWithout = integer(metadata.changesWithoutReturnedLocations, 'metadata.changesWithoutReturnedLocations', 0, 1_000);
+  integer(metadata.analysisDurationMs, 'metadata.analysisDurationMs', 0, 120_000);
   const expectedReturned = changes.reduce((sum, change) => sum + change.returnedAffectedLocationCount, 0);
   const expectedChangesWithout = changes.filter((change) => change.affectedLocationCount > 0 && change.returnedAffectedLocationCount === 0).length;
   if (total !== affectedLocations || returned !== expectedReturned || changesWithout !== expectedChangesWithout) {
     mismatch('metadata affected-source counts are inconsistent');
   }
-  if (returned > 5_000) mismatch('metadata.returnedAffectedSourceLocations exceeds the Standard profile');
   const evidenceOmitted = changes.some((change) => change.omittedAffectedLocationCount > 0);
   if (truncated !== (evidenceOmitted || warningsOmitted > 0 || warnings.some((warning) =>
     (warning as { code?: unknown }).code === 'EVIDENCE_TRUNCATED'))) mismatch('metadata.truncated is inconsistent');
   return item as unknown as ImpactReport;
+}
+
+function sourceLanguage(pathname: string): SourceLanguage | undefined {
+  const extension = pathname.slice(pathname.lastIndexOf('.')).toLowerCase();
+  if (extension === '.rs') return 'RUST';
+  if (extension === '.java') return 'JAVA';
+  if (extension === '.ts' || extension === '.tsx') return 'TYPESCRIPT';
+  if (extension === '.js' || extension === '.jsx') return 'JAVASCRIPT';
+  return undefined;
+}
+
+function exactSkipCounts(left: Partial<Record<SkipCode, number>>, right: Record<string, unknown>): boolean {
+  const leftKeys = Object.keys(left).sort(compareUtf8);
+  const rightKeys = Object.keys(right).sort(compareUtf8);
+  return leftKeys.length === rightKeys.length && leftKeys.every((key, index) =>
+    key === rightKeys[index] && left[key as SkipCode] === right[key]);
+}
+
+/** Bind a structurally valid report to the exact inline manifest submitted by this Action invocation. */
+export function validateImpactReportForRequest(report: ImpactReport, request: ImpactRequest): ImpactReport {
+  const logicalRoot = request.source.logicalRoot;
+  if (logicalRoot !== '.') validatePortablePath(logicalRoot, 'request.source.logicalRoot');
+  const submitted = new Set<string>();
+  const detected = new Set<SourceLanguage>();
+  let submittedBytes = 0;
+  for (const file of request.source.files) {
+    const portable = validatePortablePath(file.path, 'request.source.files[].path');
+    if (logicalRoot !== '.' && !portable.startsWith(`${logicalRoot}/`)) {
+      mismatch('a submitted request file is outside source.logicalRoot');
+    }
+    if (submitted.has(portable)) mismatch('the submitted inline manifest contains duplicate paths');
+    if (typeof file.content !== 'string') mismatch('the submitted inline manifest contains non-text content');
+    const language = sourceLanguage(portable);
+    if (!language) mismatch('the submitted inline manifest contains an unsupported source file');
+    submitted.add(portable);
+    detected.add(language);
+    submittedBytes += Buffer.byteLength(file.content, 'utf8');
+  }
+  if (submitted.size < 1 || submitted.size > 2_000 || submittedBytes > 16 * 1024 * 1024) {
+    mismatch('the submitted inline manifest exceeds the Standard profile');
+  }
+
+  const client = request.source.clientCollection;
+  if (client.filesSubmitted !== submitted.size) mismatch('submitted client accounting does not match the inline manifest');
+  const echoed = report.metadata.clientCollection;
+  if (!echoed) mismatch('metadata.clientCollection was omitted for an Action inline manifest');
+  for (const key of [
+    'entriesVisited', 'directoriesVisited', 'filesDiscovered', 'filesSubmitted', 'filesSkipped', 'collectionDurationMs',
+  ] as const) {
+    if (echoed[key] !== client[key]) mismatch('metadata.clientCollection does not echo the submitted accounting');
+  }
+  if (echoed.schemaVersion !== CLIENT_COLLECTION_SCHEMA_VERSION || echoed.authoritative !== false ||
+      !echoed.skipCounts || typeof echoed.skipCounts !== 'object' || Array.isArray(echoed.skipCounts) ||
+      !exactSkipCounts(client.skipCounts, echoed.skipCounts as Record<string, unknown>)) {
+    mismatch('metadata.clientCollection does not echo the submitted skip accounting');
+  }
+
+  const server = report.metadata.serverScan;
+  if (server.inputType !== 'INLINE_MANIFEST' || server.authoritative !== true ||
+      server.manifestEntriesSubmitted !== submitted.size || server.filesAccepted !== submitted.size ||
+      server.filesScanned !== submitted.size || server.filesSkipped !== 0 || server.bytesScanned !== submittedBytes) {
+    mismatch('metadata.serverScan does not reconcile with the submitted inline manifest');
+  }
+  const serverSkipCounts = server.skipCounts;
+  if (!serverSkipCounts || typeof serverSkipCounts !== 'object' || Array.isArray(serverSkipCounts) ||
+      Object.values(serverSkipCounts).some((value) => value !== 0)) {
+    mismatch('metadata.serverScan reported skipped entries for the admitted inline manifest');
+  }
+  const expectedLanguages = SOURCE_LANGUAGES.filter((language) => detected.has(language));
+  if (report.metadata.languagesDetected.length !== expectedLanguages.length ||
+      report.metadata.languagesDetected.some((language, index) => language !== expectedLanguages[index])) {
+    mismatch('metadata.languagesDetected does not match the submitted inline manifest');
+  }
+  if (report.affectedFiles > submitted.size) mismatch('affectedFiles exceeds the submitted inline manifest');
+  for (const change of report.changes) {
+    if (change.affectedFileCount > submitted.size || change.highConfidenceFileCount > submitted.size) {
+      mismatch('change affected-file counts exceed the submitted inline manifest');
+    }
+    for (const source of change.affectedSources) {
+      if (!submitted.has(source.file)) mismatch('an affected source path was not submitted by this Action invocation');
+    }
+  }
+  for (const warning of report.metadata.warnings) {
+    if (warning.path !== undefined && !submitted.has(warning.path)) {
+      mismatch('a warning path was not submitted by this Action invocation');
+    }
+  }
+  return report;
 }

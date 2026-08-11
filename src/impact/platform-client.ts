@@ -3,13 +3,13 @@ import { ImpactActionError } from './errors';
 import {
   MAX_REPORT_BYTES,
   validateImpactReport,
+  validateImpactReportForRequest,
   type ImpactReport,
   type ImpactRequest,
 } from './models';
 
 export const MAX_REQUEST_BYTES = 24 * 1024 * 1024;
 const MAX_ERROR_BYTES = 64 * 1024;
-const RETRYABLE_CODES = new Set(['impact_analysis_busy', 'impact_storage_unavailable']);
 
 export interface ImpactPlatformClientOptions {
   apiUrl: string;
@@ -70,7 +70,28 @@ function endpoint(options: ImpactPlatformClientOptions): string {
   return `${options.apiUrl}/api/v1/contract-guard/projects/${encodeURIComponent(options.projectId)}/checks/${encodeURIComponent(options.checkId)}/impact`;
 }
 
-async function readBoundedBytes(response: Response, maximumBytes: number): Promise<Uint8Array> {
+function deadlineExceeded(): ImpactActionError {
+  return new ImpactActionError('action_deadline_exceeded', 'Alconite Impact exceeded the overall Action deadline.');
+}
+
+async function readWithDeadline(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (signal.aborted) throw deadlineExceeded();
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(deadlineExceeded());
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([reader.read(), aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
+async function readBoundedBytes(response: Response, maximumBytes: number, deadline: ActionDeadline): Promise<Uint8Array> {
   const declaredRaw = response.headers.get('content-length');
   if (declaredRaw && /^\d+$/u.test(declaredRaw) && Number(declaredRaw) > maximumBytes) {
     await response.body?.cancel().catch(() => undefined);
@@ -80,11 +101,31 @@ async function readBoundedBytes(response: Response, maximumBytes: number): Promi
     throw new ImpactActionError('platform_contract_mismatch', 'Alconite returned an empty Impact response.', { status: response.status });
   }
   const reader = response.body.getReader();
+  const deadlineSignal = deadline.signal();
   const chunks: Uint8Array[] = [];
   let total = 0;
   while (true) {
-    const { done, value } = await reader.read();
+    let result: ReadableStreamReadResult<Uint8Array>;
+    try {
+      result = await readWithDeadline(reader, deadlineSignal);
+    } catch (error) {
+      // Cancellation is best-effort: an adversarial stream must not extend the Action deadline by
+      // returning a never-settling cancellation promise.
+      void reader.cancel().catch(() => undefined);
+      if (error instanceof ImpactActionError && error.code === 'action_deadline_exceeded') throw error;
+      try {
+        deadline.throwIfExpired();
+      } catch (deadlineError) {
+        throw deadlineError;
+      }
+      if (error instanceof DOMException && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
+        throw deadlineExceeded();
+      }
+      throw error;
+    }
+    const { done, value } = result;
     if (done) break;
+    deadline.throwIfExpired();
     total += value.byteLength;
     if (total > maximumBytes) {
       await reader.cancel().catch(() => undefined);
@@ -101,8 +142,8 @@ async function readBoundedBytes(response: Response, maximumBytes: number): Promi
   return bytes;
 }
 
-async function readBoundedJson(response: Response, maximumBytes: number): Promise<unknown> {
-  const bytes = await readBoundedBytes(response, maximumBytes);
+async function readBoundedJson(response: Response, maximumBytes: number, deadline: ActionDeadline): Promise<unknown> {
+  const bytes = await readBoundedBytes(response, maximumBytes, deadline);
   try {
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
   } catch (error) {
@@ -196,9 +237,12 @@ export class ImpactPlatformClient {
             status: response.status,
           });
         }
-        const raw = await readBoundedJson(response, MAX_REPORT_BYTES);
+        const raw = await readBoundedJson(response, MAX_REPORT_BYTES, this.options.deadline);
         this.options.deadline.throwIfExpired();
-        const report = validateImpactReport(raw, this.options.projectId, this.options.checkId);
+        const report = validateImpactReportForRequest(
+          validateImpactReport(raw, this.options.projectId, this.options.checkId),
+          request,
+        );
         this.options.deadline.throwIfExpired();
         return report;
       }
@@ -211,13 +255,17 @@ export class ImpactPlatformClient {
 
       let rawError: unknown;
       try {
-        rawError = await readBoundedJson(response, MAX_ERROR_BYTES);
-      } catch {
+        rawError = await readBoundedJson(response, MAX_ERROR_BYTES, this.options.deadline);
+      } catch (error) {
+        if (error instanceof ImpactActionError && error.code === 'action_deadline_exceeded') throw error;
         rawError = undefined;
       }
       const envelope = errorEnvelope(rawError);
       const retryableGateway = response.status === 504 && !envelope;
-      const retryableCode = envelope ? RETRYABLE_CODES.has(envelope.code) : false;
+      const retryableCode = envelope !== undefined && (
+        (response.status === 429 && envelope.code === 'impact_analysis_busy') ||
+        (response.status === 503 && envelope.code === 'impact_storage_unavailable')
+      );
       if ((retryableGateway || retryableCode) && attempt < this.options.attempts) {
         await this.options.deadline.wait(retryAfterMilliseconds(response.headers.get('retry-after')) ?? backoff(attempt));
         continue;

@@ -50,6 +50,21 @@ export function sameFilesystemObject(left: StableIdentity, right: StableIdentity
   return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.nlink === right.nlink;
 }
 
+/** Report directory creation legitimately changes parent nlink/ctime; bind the stable object and mode instead. */
+export function sameReportDirectoryObject(left: StableIdentity, right: StableIdentity): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode;
+}
+
+/** The checked-in Action currently supports only Linux primitives that prove both source and report safety. */
+export function assertSupportedActionPlatform(platform: NodeJS.Platform = process.platform): void {
+  if (platform !== 'linux' || typeof constants.O_NOFOLLOW !== 'number' || typeof constants.O_DIRECTORY !== 'number') {
+    throw new ImpactActionError(
+      'unsupported_secure_source_filesystem',
+      'Secure Alconite Impact execution requires a Linux runner with descriptor-relative no-follow filesystem support.',
+    );
+  }
+}
+
 function samePath(left: string, right: string): boolean {
   const normalize = (value: string): string => process.platform === 'win32' ? value.toLowerCase() : value;
   return normalize(path.normalize(left)) === normalize(path.normalize(right));
@@ -114,7 +129,7 @@ export async function assertDirectoryIdentity(directory: VerifiedDirectory, purp
   const realPath = await fs.realpath(directory.path);
   const current = stableIdentity(stats, purpose);
   const unchanged = purpose === 'report'
-    ? sameFilesystemObject(directory.identity, current)
+    ? sameReportDirectoryObject(directory.identity, current)
     : sameIdentity(directory.identity, current);
   if (!stats.isDirectory() || stats.isSymbolicLink() || !unchanged || !samePath(realPath, directory.realPath)) {
     throw new ImpactActionError(
