@@ -335,6 +335,34 @@ test('fails closed before reading outside source when a workspace parent is swap
   assert.equal(fileOpened, false);
 });
 
+test('tolerates unrelated entry churn in an opened workspace ancestor', {
+  skip: process.platform !== 'linux',
+}, async () => {
+  const base = await temporaryWorkspace();
+  const parent = path.join(base, 'repository-parent');
+  const workspace = path.join(parent, 'workspace');
+  await fs.mkdir(workspace, { recursive: true });
+  await fs.writeFile(path.join(workspace, 'customer.ts'), 'interface Customer {}\n');
+  let ancestorMutated = false;
+  const result = await collectSourceManifest({
+    workspace,
+    sourceRoot: '.',
+    includeGeneratedDirectories: false,
+    additionalIgnorePatterns: [],
+    deadline: deadline(),
+    hooks: {
+      afterRootComponentOpened: async (requestedRoot, openedComponent) => {
+        if (!ancestorMutated && requestedRoot === workspace && openedComponent === parent) {
+          ancestorMutated = true;
+          await fs.mkdir(path.join(parent, 'unrelated-sibling'));
+        }
+      },
+    },
+  });
+  assert.equal(ancestorMutated, true);
+  assert.deepEqual(result.files.map((file) => file.path), ['customer.ts']);
+});
+
 test('checks the shared monotonic deadline during collection', async () => {
   const workspace = await temporaryWorkspace();
   const filename = path.join(workspace, 'customer.ts');

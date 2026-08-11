@@ -7,10 +7,10 @@ import { RISK_VALUES, type ImpactReport, type ImpactRisk } from './models';
 import {
   assertDirectoryIdentity,
   isContained,
+  sameDirectoryObject,
   sameFilesystemObject,
   sameIdentity,
   samePath,
-  sameReportDirectoryObject,
   stableIdentity,
   verifyAbsoluteDirectory,
   type RootVerificationHooks,
@@ -77,7 +77,7 @@ function descriptorChild(handle: FileHandle, child: string): string {
 
 async function assertReportDirectoryHandle(handle: FileHandle, identity: StableIdentity, label: string): Promise<void> {
   const stats = await handle.stat({ bigint: true });
-  if (!stats.isDirectory() || !sameReportDirectoryObject(identity, fileIdentity(stats))) {
+  if (!stats.isDirectory() || !sameDirectoryObject(identity, fileIdentity(stats))) {
     throw new ImpactActionError('unsupported_secure_report_filesystem', `The verified ${label} changed during report creation.`);
   }
 }
@@ -97,7 +97,7 @@ async function openReportDirectory(directory: VerifiedDirectory, label: string):
     await assertReportDirectoryHandle(handle, directory.identity, label);
     const throughDescriptor = await fs.stat(descriptorPath(handle), { bigint: true });
     if (!throughDescriptor.isDirectory() ||
-        !sameReportDirectoryObject(directory.identity, fileIdentity(throughDescriptor))) {
+        !sameDirectoryObject(directory.identity, fileIdentity(throughDescriptor))) {
       throw new ImpactActionError(
         'unsupported_secure_report_filesystem',
         `The ${label} cannot be addressed safely through /proc/self/fd.`,
@@ -176,7 +176,7 @@ export async function writePrivateReport(
     const ambientStats = await fs.lstat(createdPath, { bigint: true });
     const ambientRealPath = await fs.realpath(createdPath);
     if (!ambientStats.isDirectory() || ambientStats.isSymbolicLink() ||
-        !sameReportDirectoryObject(childIdentity, fileIdentity(ambientStats)) ||
+        !sameDirectoryObject(childIdentity, fileIdentity(ambientStats)) ||
         (Number(securedStats.mode) & 0o777) !== 0o700 || !samePath(descriptorRealPath, ambientRealPath)) {
       throw new ImpactActionError('unsupported_secure_report_filesystem', 'The private Impact report directory path changed during creation.');
     }

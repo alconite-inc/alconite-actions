@@ -28,6 +28,10 @@ All notable changes to this project are documented in this file.
 - Published Contract Guard, Runtime Verify, and Impact under one repository-wide v2.2.0 release identity, including synchronized runner metadata and outbound user agents.
 - Updated current component and reusable-workflow examples to v2.2.0 and aligned report uploads with the reviewed `actions/upload-artifact` v7.0.1 commit.
 
+### Fixed
+
+- Tolerate unrelated entry churn in ancestor directories during descriptor-bound source-root verification while retaining inode, final-path, leaf-identity, and no-follow replacement checks.
+
 ### Documentation
 
 - Documented the released Impact workflow, exact token scopes, Linux runner boundary, bounded collection and retry behavior, private report lifecycle, and the separation between publishing this Action and enabling the platform feature.

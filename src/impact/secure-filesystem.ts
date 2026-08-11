@@ -54,8 +54,8 @@ export function sameFilesystemObject(left: StableIdentity, right: StableIdentity
   return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.nlink === right.nlink;
 }
 
-/** Report directory creation legitimately changes parent nlink/ctime; bind the stable object and mode instead. */
-export function sameReportDirectoryObject(left: StableIdentity, right: StableIdentity): boolean {
+/** Directory entry churn changes nlink/ctime; bind the opened directory object and mode instead. */
+export function sameDirectoryObject(left: StableIdentity, right: StableIdentity): boolean {
   return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode;
 }
 
@@ -203,7 +203,9 @@ export async function verifyAbsoluteDirectory(
       try {
         await hooks.afterRootComponentOpened?.(resolved, openedPath);
         const childAfter = stableIdentity(await child.stat({ bigint: true }), purpose);
-        if (!sameIdentity(childBefore, childAfter)) {
+        // Concurrent work elsewhere in an ancestor can legitimately change directory nlink/ctime.
+        // The descriptor pins the inode, while the final ambient-path proof below detects a swap.
+        if (!sameDirectoryObject(childBefore, childAfter)) {
           throw new ImpactActionError(
             purpose === 'report' ? 'unsupported_secure_report_filesystem' : 'source_race_detected',
             `The ${purpose} root changed while a component was being established.`,
@@ -251,7 +253,7 @@ export async function assertDirectoryIdentity(directory: VerifiedDirectory, purp
   const realPath = await fs.realpath(directory.path);
   const current = stableIdentity(stats, purpose);
   const unchanged = purpose === 'report'
-    ? sameReportDirectoryObject(directory.identity, current)
+    ? sameDirectoryObject(directory.identity, current)
     : sameIdentity(directory.identity, current);
   if (!stats.isDirectory() || stats.isSymbolicLink() || !unchanged || !samePath(realPath, directory.realPath)) {
     throw new ImpactActionError(

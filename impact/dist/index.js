@@ -1945,7 +1945,7 @@ function sameIdentity(left, right) {
 function sameFilesystemObject(left, right) {
   return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.nlink === right.nlink;
 }
-function sameReportDirectoryObject(left, right) {
+function sameDirectoryObject(left, right) {
   return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode;
 }
 function assertSupportedActionPlatform(platform = process.platform) {
@@ -2056,7 +2056,7 @@ async function verifyAbsoluteDirectory(requested, purpose, deadline, hooks = {})
       try {
         await hooks.afterRootComponentOpened?.(resolved, openedPath);
         const childAfter = stableIdentity(await child.stat({ bigint: true }), purpose);
-        if (!sameIdentity(childBefore, childAfter)) {
+        if (!sameDirectoryObject(childBefore, childAfter)) {
           throw new ImpactActionError(
             purpose === "report" ? "unsupported_secure_report_filesystem" : "source_race_detected",
             `The ${purpose} root changed while a component was being established.`
@@ -2097,7 +2097,7 @@ async function assertDirectoryIdentity(directory, purpose) {
   const stats = await lstatBigInt(directory.path);
   const realPath = await import_node_fs2.promises.realpath(directory.path);
   const current = stableIdentity(stats, purpose);
-  const unchanged = purpose === "report" ? sameReportDirectoryObject(directory.identity, current) : sameIdentity(directory.identity, current);
+  const unchanged = purpose === "report" ? sameDirectoryObject(directory.identity, current) : sameIdentity(directory.identity, current);
   if (!stats.isDirectory() || stats.isSymbolicLink() || !unchanged || !samePath(realPath, directory.realPath)) {
     throw new ImpactActionError(
       purpose === "report" ? "unsupported_secure_report_filesystem" : "source_race_detected",
@@ -2255,7 +2255,7 @@ function descriptorChild2(handle, child) {
 }
 async function assertReportDirectoryHandle(handle, identity, label) {
   const stats = await handle.stat({ bigint: true });
-  if (!stats.isDirectory() || !sameReportDirectoryObject(identity, fileIdentity(stats))) {
+  if (!stats.isDirectory() || !sameDirectoryObject(identity, fileIdentity(stats))) {
     throw new ImpactActionError("unsupported_secure_report_filesystem", `The verified ${label} changed during report creation.`);
   }
 }
@@ -2273,7 +2273,7 @@ async function openReportDirectory(directory, label) {
   try {
     await assertReportDirectoryHandle(handle, directory.identity, label);
     const throughDescriptor = await import_node_fs3.promises.stat(descriptorPath2(handle), { bigint: true });
-    if (!throughDescriptor.isDirectory() || !sameReportDirectoryObject(directory.identity, fileIdentity(throughDescriptor))) {
+    if (!throughDescriptor.isDirectory() || !sameDirectoryObject(directory.identity, fileIdentity(throughDescriptor))) {
       throw new ImpactActionError(
         "unsupported_secure_report_filesystem",
         `The ${label} cannot be addressed safely through /proc/self/fd.`
@@ -2338,7 +2338,7 @@ async function writePrivateReport(report, runnerTemp, workspacePath, deadline, h
     const descriptorRealPath = await import_node_fs3.promises.realpath(descriptorPath2(directoryHandle));
     const ambientStats = await import_node_fs3.promises.lstat(createdPath, { bigint: true });
     const ambientRealPath = await import_node_fs3.promises.realpath(createdPath);
-    if (!ambientStats.isDirectory() || ambientStats.isSymbolicLink() || !sameReportDirectoryObject(childIdentity, fileIdentity(ambientStats)) || (Number(securedStats.mode) & 511) !== 448 || !samePath(descriptorRealPath, ambientRealPath)) {
+    if (!ambientStats.isDirectory() || ambientStats.isSymbolicLink() || !sameDirectoryObject(childIdentity, fileIdentity(ambientStats)) || (Number(securedStats.mode) & 511) !== 448 || !samePath(descriptorRealPath, ambientRealPath)) {
       throw new ImpactActionError("unsupported_secure_report_filesystem", "The private Impact report directory path changed during creation.");
     }
     directory = { path: createdPath, realPath: descriptorRealPath, identity: childIdentity };
