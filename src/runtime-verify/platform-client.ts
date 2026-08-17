@@ -29,7 +29,7 @@ const RUNTIME_RULE_IDS = new Set([
 
 export interface InitiationRequest {
   environmentId: string;
-  contractGuardCheckId: string;
+  contractGuardCheckId?: string;
   contractContentHash: string;
   configurationContentHash: string;
   displayName: string;
@@ -54,6 +54,7 @@ export interface InitiationRequest {
 export interface InitiationResponse {
   runId: string;
   status: 'pending' | 'completed';
+  contractGuardCheckId?: string;
   expectedContractContentHash: string;
   maximumOperations: number;
   replayed: boolean;
@@ -194,7 +195,7 @@ export function createInitiationRequest(
 ): InitiationRequest {
   return {
     environmentId: inputs.environmentId,
-    contractGuardCheckId: inputs.checkId,
+    ...(inputs.checkId ? { contractGuardCheckId: inputs.checkId } : {}),
     contractContentHash,
     configurationContentHash,
     displayName: inputs.displayName ?? bounded(environment.GITHUB_SHA || 'Runtime verification', 160),
@@ -219,6 +220,9 @@ function validateInitiation(raw: unknown): InitiationResponse {
   validateRunId(runId);
   const status = value.status;
   if (status !== 'pending' && status !== 'completed') mismatch('Initiation status is invalid.');
+  const contractGuardCheckId = value.contractGuardCheckId === undefined || value.contractGuardCheckId === null
+    ? undefined
+    : identifier(value.contractGuardCheckId, 'contractGuardCheckId', /^cgchk_[0-9a-f]{32}$/);
   const expectedContractContentHash = hash(value.expectedContractContentHash, 'expectedContractContentHash');
   const limits = object(value.limits, 'initiation limits');
   const maximumOperations = integer(limits.maximumOperations, 1, 500, 'limits.maximumOperations');
@@ -226,7 +230,7 @@ function validateInitiation(raw: unknown): InitiationResponse {
   if (status === 'completed' && !report) mismatch('A completed replay did not include its canonical report.');
   if (typeof value.replayed !== 'boolean') mismatch('The initiation replay state is invalid.');
   return {
-    runId, status, expectedContractContentHash, maximumOperations,
+    runId, status, ...(contractGuardCheckId ? { contractGuardCheckId } : {}), expectedContractContentHash, maximumOperations,
     replayed: value.replayed || status === 'completed',
     ...(report ? { report } : {})
   };
@@ -358,7 +362,14 @@ async function discard(response: Response): Promise<void> { await response.body?
 function platformHttpError(status: number, raw: unknown, phase: string): RuntimeVerifyError {
   const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
   const detail = value.error && typeof value.error === 'object' ? value.error as Record<string, unknown> : {};
-  const code = typeof detail.code === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(detail.code) ? ` (${detail.code})` : '';
+  const safeCode = typeof detail.code === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(detail.code) ? detail.code : undefined;
+  if (safeCode === 'approved_contract_check_not_found') {
+    return new RuntimeVerifyError(
+      'platform_error',
+      'No approved Contract Guard check exists for the deployed contract. Run Contract Guard against this contract before deploying or provide an explicit check-id.'
+    );
+  }
+  const code = safeCode ? ` (${safeCode})` : '';
   return new RuntimeVerifyError('platform_error', `Alconite rejected Runtime Verify ${phase} with HTTP ${status}${code}.`);
 }
 function validateRunId(value: string): void { if (!/^rtvrun_[0-9a-f]{32}$/.test(value)) mismatch('The Runtime Verify run identifier is invalid.'); }

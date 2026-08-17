@@ -52,10 +52,11 @@ const runtime = parse(await fs.readFile(path.resolve('runtime-verify/action.yml'
 assert.equal(runtime.runs.using, 'node24', 'the Runtime Verify component must use the Node 24 runtime');
 assert.equal(runtime.runs.main, 'dist/index.js', 'the Runtime Verify entry point must use checked-in build output');
 await fs.access(path.resolve('runtime-verify', runtime.runs.main));
-const runtimeRequiredInputs = ['project-id', 'project-token', 'environment-id', 'check-id', 'base-url'];
+const runtimeRequiredInputs = ['project-id', 'project-token', 'environment-id', 'base-url'];
 for (const name of runtimeRequiredInputs) assert.equal(runtime.inputs[name].required, true, `Runtime Verify input ${name} must remain required`);
+assert.equal(runtime.inputs['check-id'].required, false, 'Runtime Verify check-id must support automatic exact-contract resolution');
 const runtimeOutputs = [
-  'run-id', 'project-id', 'environment-id', 'check-id', 'status', 'gate-result', 'report-url', 'report-path',
+  'run-id', 'project-id', 'environment-id', 'check-id', 'deployment-id', 'status', 'gate-result', 'report-url', 'report-path',
   'contract-content-hash', 'configured-operations', 'executed-operations', 'passed-operations', 'failed-operations',
   'warning-operations', 'finding-count', 'replayed',
 ];
@@ -103,14 +104,19 @@ assert.ok(contractStep, 'the Impact workflow example must include the root Contr
 assert.ok(impactStep, 'the Impact workflow example must include the additive Impact step');
 assert.equal(
   impactStep.if,
-  "${{ always() && steps.contract_guard.outputs.check-id != '' }}",
-  'the Impact example must run after a gate failure only when Contract Guard emitted a check ID',
+  "steps.contract_guard.outcome == 'success'",
+  'the recommended Impact example must follow a successful Contract Guard PR check',
 );
 assert.equal(
   impactStep.with['check-id'],
   '${{ steps.contract_guard.outputs.check-id }}',
   'the Impact example must chain the root Action check ID',
 );
+
+for (const filename of ['examples/runtime-verify-deployment.yml', 'examples/runtime-verify-manual.yml']) {
+  const example = parse(await fs.readFile(path.resolve(filename), 'utf8'));
+  assert.ok(example.jobs && typeof example.jobs === 'object', `${filename} must define jobs`);
+}
 
 const workflowFiles = (await fs.readdir('.github/workflows'))
   .filter((filename) => filename.endsWith('.yml') || filename.endsWith('.yaml'))

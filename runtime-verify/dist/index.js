@@ -26620,7 +26620,7 @@ function writeJobSummary(markdown) {
 }
 
 // src/release.ts
-var ACTION_RELEASE_VERSION = "2.2.0";
+var ACTION_RELEASE_VERSION = "2.3.0";
 var CONTRACT_GUARD_USER_AGENT = `alconite-contract-guard-action/${ACTION_RELEASE_VERSION}`;
 var IMPACT_USER_AGENT = `alconite-impact-action/${ACTION_RELEASE_VERSION}`;
 var RUNTIME_VERIFY_USER_AGENT = `alconite-runtime-verify-action/${ACTION_RELEASE_VERSION}`;
@@ -26898,7 +26898,7 @@ function isWithin(parent, child) {
 }
 
 // src/runtime-verify/github-summary.ts
-function runtimeSummary(report, reportUrl) {
+function runtimeSummary(report, reportUrl, resolution) {
   const byRule = /* @__PURE__ */ new Map();
   for (const item of report.findings) byRule.set(item.ruleId, (byRule.get(item.ruleId) ?? 0) + 1);
   const lines = [
@@ -26909,7 +26909,9 @@ function runtimeSummary(report, reportUrl) {
     `| Runtime Verify status | ${escapeMarkdown(report.status)} |`,
     `| Gate result | ${escapeMarkdown(report.gateResult)} |`,
     `| Environment ID | ${escapeMarkdown(report.environmentId)} |`,
+    `| Deployment | ${escapeMarkdown(report.deployment.releaseIdentifier ?? "—")} |`,
     `| Contract Guard check ID | ${escapeMarkdown(report.contractGuardCheckId)} |`,
+    `| Resolution | ${resolution} |`,
     `| Run ID | ${escapeMarkdown(report.runId)} |`,
     `| Contract hash match | ${report.contract.hashMatched ? "yes" : "no"} |`,
     `| Configured operations | ${report.summary.configuredOperations} |`,
@@ -26950,7 +26952,8 @@ function readInputs() {
   const projectToken = getInput("project-token", { required: true });
   if (!/^alc_cg_[A-Za-z0-9_-]{1,240}$/.test(projectToken)) throw inputError("Project token must be a bounded alc_cg_ token.");
   const environmentId = identifier(getInput("environment-id", { required: true }), "environment ID", IDENTIFIERS.environmentId);
-  const checkId = identifier(getInput("check-id", { required: true }), "check ID", IDENTIFIERS.checkId);
+  const rawCheckId = getInput("check-id");
+  const checkId = rawCheckId ? identifier(rawCheckId, "check ID", IDENTIFIERS.checkId) : void 0;
   const displayName = optionalBounded(getInput("display-name"), "Display name", 160);
   const deploymentId = optionalBounded(getInput("deployment-id"), "Deployment ID", 200);
   const idempotencyKey = optionalBounded(getInput("idempotency-key"), "Idempotency key", 200);
@@ -26958,7 +26961,7 @@ function readInputs() {
     projectId,
     projectToken,
     environmentId,
-    checkId,
+    ...checkId ? { checkId } : {},
     baseUrl: validateOrigin(getInput("base-url", { required: true }), "Target base URL"),
     contractPath: getInput("contract-path") || "openapi.yaml",
     configurationPath: getInput("configuration-path") || ".alconite/runtime-verify.yaml",
@@ -26990,18 +26993,18 @@ function validateOrigin(raw, label) {
 function deriveIdempotencyKey(inputs, contractHash, configurationHash, environment = process.env) {
   if (inputs.idempotencyKey) return inputs.idempotencyKey;
   const material = [
-    "runtime-gh-v1",
+    "runtime-gh-v2",
     environment.GITHUB_REPOSITORY ?? "local",
-    environment.GITHUB_RUN_ID ?? "local",
-    environment.GITHUB_RUN_ATTEMPT ?? "1",
+    environment.GITHUB_WORKFLOW_REF ?? environment.GITHUB_WORKFLOW ?? "local",
     inputs.projectId,
     inputs.environmentId,
-    inputs.checkId,
+    inputs.deploymentId ?? environment.GITHUB_SHA ?? "local",
+    environment.GITHUB_RUN_ATTEMPT ?? "1",
+    inputs.checkId ? `explicit:${inputs.checkId}` : "automatic",
     contractHash,
-    configurationHash,
-    inputs.deploymentId ?? ""
+    configurationHash
   ].join("\n");
-  return `runtime-gh-v1-${sha256(material).slice("sha256:".length)}`;
+  return `runtime-gh-v2-${sha256(material).slice("sha256:".length)}`;
 }
 function identifier(raw, label, pattern) {
   if (!pattern.test(raw) || raw.includes("/") || raw.includes("\\")) throw inputError(`The ${label} has an invalid format.`);
@@ -27055,7 +27058,10 @@ async function loadOpenApi(requestedPath, workspace) {
     throw new RuntimeVerifyError("invalid_openapi", "The selected OpenAPI contract failed structural or local-reference validation.");
   }
   assertUniqueOperationIds(raw);
-  return { path: resolvedPath, contentHash: sha256(bytes), version, document: raw, operationCount: limits.operations };
+  return { path: resolvedPath, contentHash: platformContractContentHash(bytes), version, document: raw, operationCount: limits.operations };
+}
+function platformContractContentHash(bytes) {
+  return sha256(Buffer.from(bytes.filter((byte) => byte !== 13)));
 }
 function inspectDocument(root) {
   let nodes = 0;
@@ -27405,7 +27411,7 @@ function recoverableRunId(raw) {
 function createInitiationRequest(inputs, contractContentHash, configurationContentHash, environment = process.env) {
   return {
     environmentId: inputs.environmentId,
-    contractGuardCheckId: inputs.checkId,
+    ...inputs.checkId ? { contractGuardCheckId: inputs.checkId } : {},
     contractContentHash,
     configurationContentHash,
     displayName: inputs.displayName ?? bounded(environment.GITHUB_SHA || "Runtime verification", 160),
@@ -27433,6 +27439,7 @@ function validateInitiation(raw) {
   validateRunId(runId);
   const status = value.status;
   if (status !== "pending" && status !== "completed") mismatch("Initiation status is invalid.");
+  const contractGuardCheckId = value.contractGuardCheckId === void 0 || value.contractGuardCheckId === null ? void 0 : identifier2(value.contractGuardCheckId, "contractGuardCheckId", /^cgchk_[0-9a-f]{32}$/);
   const expectedContractContentHash = hash(value.expectedContractContentHash, "expectedContractContentHash");
   const limits = object2(value.limits, "initiation limits");
   const maximumOperations = integer(limits.maximumOperations, 1, 500, "limits.maximumOperations");
@@ -27442,6 +27449,7 @@ function validateInitiation(raw) {
   return {
     runId,
     status,
+    ...contractGuardCheckId ? { contractGuardCheckId } : {},
     expectedContractContentHash,
     maximumOperations,
     replayed: value.replayed || status === "completed",
@@ -27587,7 +27595,14 @@ async function discard(response) {
 function platformHttpError(status, raw, phase) {
   const value = raw && typeof raw === "object" ? raw : {};
   const detail = value.error && typeof value.error === "object" ? value.error : {};
-  const code = typeof detail.code === "string" && /^[A-Za-z0-9_.-]{1,80}$/.test(detail.code) ? ` (${detail.code})` : "";
+  const safeCode = typeof detail.code === "string" && /^[A-Za-z0-9_.-]{1,80}$/.test(detail.code) ? detail.code : void 0;
+  if (safeCode === "approved_contract_check_not_found") {
+    return new RuntimeVerifyError(
+      "platform_error",
+      "No approved Contract Guard check exists for the deployed contract. Run Contract Guard against this contract before deploying or provide an explicit check-id."
+    );
+  }
+  const code = safeCode ? ` (${safeCode})` : "";
   return new RuntimeVerifyError("platform_error", `Alconite rejected Runtime Verify ${phase} with HTTP ${status}${code}.`);
 }
 function validateRunId(value) {
@@ -28139,6 +28154,7 @@ async function run() {
       createInitiationRequest(inputs, contract.contentHash, configuration.contentHash),
       idempotencyKey
     );
+    const resolvedCheckId = resolveCheckId(initiation.contractGuardCheckId, inputs.checkId);
     runId = initiation.runId;
     replayed = initiation.replayed;
     info(`Alconite Runtime Verify run ${runId} ${replayed ? "replayed" : "initiated"}.`);
@@ -28148,6 +28164,7 @@ async function run() {
         inputs,
         true,
         initiation.runId,
+        resolvedCheckId,
         contract.contentHash,
         initiation.expectedContractContentHash
       );
@@ -28186,6 +28203,7 @@ async function run() {
       inputs,
       replayed,
       initiation.runId,
+      resolvedCheckId,
       contract.contentHash,
       initiation.expectedContractContentHash
     );
@@ -28197,8 +28215,8 @@ async function run() {
     throw safe;
   }
 }
-async function finish(report, inputs, replayed, expectedRunId, localContractHash, expectedContractHash) {
-  if (report.projectId !== inputs.projectId || report.environmentId !== inputs.environmentId || report.contractGuardCheckId !== inputs.checkId) {
+async function finish(report, inputs, replayed, expectedRunId, resolvedCheckId, localContractHash, expectedContractHash) {
+  if (report.projectId !== inputs.projectId || report.environmentId !== inputs.environmentId || report.contractGuardCheckId !== resolvedCheckId) {
     throw new RuntimeVerifyError("platform_contract_mismatch", "The Runtime Verify report does not match the requested project, environment, and Contract Guard check.");
   }
   if (report.runId !== expectedRunId || report.contract.localContractContentHash !== localContractHash || report.contract.approvedCandidateContentHash !== expectedContractHash) {
@@ -28210,6 +28228,7 @@ async function finish(report, inputs, replayed, expectedRunId, localContractHash
   setOutput("project-id", report.projectId);
   setOutput("environment-id", report.environmentId);
   setOutput("check-id", report.contractGuardCheckId);
+  setOutput("deployment-id", report.deployment.releaseIdentifier ?? "");
   setOutput("status", report.status);
   setOutput("gate-result", report.gateResult);
   setOutput("report-url", reportUrl);
@@ -28222,11 +28241,21 @@ async function finish(report, inputs, replayed, expectedRunId, localContractHash
   setOutput("warning-operations", String(report.summary.warningOperations));
   setOutput("finding-count", String(report.findings.length));
   setOutput("replayed", String(replayed));
-  await writeJobSummary(runtimeSummary(report, reportUrl));
+  await writeJobSummary(runtimeSummary(report, reportUrl, inputs.checkId ? "Explicit" : "Automatic"));
   info(`Alconite Runtime Verify completed with gate result ${report.gateResult}.`);
   if (shouldFailGate(report.gateResult, inputs.failOn)) {
     throw new RuntimeVerifyError("platform_error", `Alconite Runtime Verify gate result ${report.gateResult} meets the configured fail-on threshold.`);
   }
+}
+function resolveCheckId(platformCheckId, explicitCheckId) {
+  if (platformCheckId && explicitCheckId && platformCheckId !== explicitCheckId) {
+    throw new RuntimeVerifyError("platform_contract_mismatch", "Alconite resolved a different Contract Guard check than the explicit check-id.");
+  }
+  const resolved = platformCheckId ?? explicitCheckId;
+  if (!resolved) {
+    throw new RuntimeVerifyError("platform_contract_mismatch", "Alconite did not return the Contract Guard check selected for automatic Runtime Verify resolution.");
+  }
+  return resolved;
 }
 function canonicalReportUrl(apiUrl, report) {
   const fallback = `/api/v1/runtime-verify/projects/${report.projectId}/runs/${report.runId}/report`;

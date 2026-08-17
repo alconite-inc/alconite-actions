@@ -2,6 +2,7 @@
   "runId": "rtvrun_33333333333333333333333333333333",
   "status": "pending",
   "replayed": false,
+  "contractGuardCheckId": "cgchk_22222222222222222222222222222222",
   "expectedContractContentHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "policyRevision": 1,
   "policy": {

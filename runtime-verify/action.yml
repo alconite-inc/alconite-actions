@@ -17,8 +17,8 @@ inputs:
     description: Stable Runtime Verify environment identifier beginning with rtvenv_.
     required: true
   check-id:
-    description: Contract Guard check identifier that approved the selected contract.
-    required: true
+    description: Optional Contract Guard check identifier. When omitted, Runtime Verify resolves the approved check matching the deployed contract.
+    required: false
   base-url:
     description: HTTPS origin for the customer API tested from this runner.
     required: true
@@ -71,7 +71,9 @@ outputs:
   environment-id:
     description: Stable Runtime Verify environment identifier.
   check-id:
-    description: Contract Guard check identifier linked to the run.
+    description: Contract Guard check used as the approved runtime baseline.
+  deployment-id:
+    description: Deployment identifier verified by Runtime Verify.
   status:
     description: Durable Runtime Verify report status.
   gate-result:
@@ -79,9 +81,9 @@ outputs:
   report-url:
     description: Canonical Alconite report URL.
   report-path:
-    description: Local path containing the canonical JSON report.
+    description: Absolute path to the generated Runtime Verify JSON report.
   contract-content-hash:
-    description: SHA-256 hash of the exact checked-in contract bytes.
+    description: Platform-compatible SHA-256 identity of the checked-in contract.
   configured-operations:
     description: Number of explicitly configured operations.
   executed-operations:

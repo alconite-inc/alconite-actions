@@ -29,12 +29,13 @@ async function run(): Promise<void> {
     const initiation = await platform.initiate(
       createInitiationRequest(inputs, contract.contentHash, configuration.contentHash), idempotencyKey
     );
+    const resolvedCheckId = resolveCheckId(initiation.contractGuardCheckId, inputs.checkId);
     runId = initiation.runId;
     replayed = initiation.replayed;
     info(`Alconite Runtime Verify run ${runId} ${replayed ? 'replayed' : 'initiated'}.`);
     if (initiation.status === 'completed') {
-      await finish(initiation.report!, inputs, true, initiation.runId, contract.contentHash,
-        initiation.expectedContractContentHash);
+      await finish(initiation.report!, inputs, true, initiation.runId, resolvedCheckId,
+        contract.contentHash, initiation.expectedContractContentHash);
       return;
     }
     plan = createOperationPlan(contract, configuration.configuration, configuration.resolvedHeaders, initiation.maximumOperations);
@@ -65,8 +66,8 @@ async function run(): Promise<void> {
       findings
     });
     const report = await platform.complete(runId, result);
-    await finish(report, inputs, replayed, initiation.runId, contract.contentHash,
-      initiation.expectedContractContentHash);
+    await finish(report, inputs, replayed, initiation.runId, resolvedCheckId,
+      contract.contentHash, initiation.expectedContractContentHash);
   } catch (error) {
     const safe = safeError(error);
     if (runId && safe.code !== 'platform_error') {
@@ -81,10 +82,11 @@ async function finish(
   inputs: ReturnType<typeof readInputs>,
   replayed: boolean,
   expectedRunId: string,
+  resolvedCheckId: string,
   localContractHash: string,
   expectedContractHash: string
 ): Promise<void> {
-  if (report.projectId !== inputs.projectId || report.environmentId !== inputs.environmentId || report.contractGuardCheckId !== inputs.checkId) {
+  if (report.projectId !== inputs.projectId || report.environmentId !== inputs.environmentId || report.contractGuardCheckId !== resolvedCheckId) {
     throw new RuntimeVerifyError('platform_contract_mismatch', 'The Runtime Verify report does not match the requested project, environment, and Contract Guard check.');
   }
   if (report.runId !== expectedRunId || report.contract.localContractContentHash !== localContractHash
@@ -97,6 +99,7 @@ async function finish(
   setOutput('project-id', report.projectId);
   setOutput('environment-id', report.environmentId);
   setOutput('check-id', report.contractGuardCheckId);
+  setOutput('deployment-id', report.deployment.releaseIdentifier ?? '');
   setOutput('status', report.status);
   setOutput('gate-result', report.gateResult);
   setOutput('report-url', reportUrl);
@@ -109,11 +112,22 @@ async function finish(
   setOutput('warning-operations', String(report.summary.warningOperations));
   setOutput('finding-count', String(report.findings.length));
   setOutput('replayed', String(replayed));
-  await writeJobSummary(runtimeSummary(report, reportUrl));
+  await writeJobSummary(runtimeSummary(report, reportUrl, inputs.checkId ? 'Explicit' : 'Automatic'));
   info(`Alconite Runtime Verify completed with gate result ${report.gateResult}.`);
   if (shouldFailGate(report.gateResult, inputs.failOn)) {
     throw new RuntimeVerifyError('platform_error', `Alconite Runtime Verify gate result ${report.gateResult} meets the configured fail-on threshold.`);
   }
+}
+
+function resolveCheckId(platformCheckId: string | undefined, explicitCheckId: string | undefined): string {
+  if (platformCheckId && explicitCheckId && platformCheckId !== explicitCheckId) {
+    throw new RuntimeVerifyError('platform_contract_mismatch', 'Alconite resolved a different Contract Guard check than the explicit check-id.');
+  }
+  const resolved = platformCheckId ?? explicitCheckId;
+  if (!resolved) {
+    throw new RuntimeVerifyError('platform_contract_mismatch', 'Alconite did not return the Contract Guard check selected for automatic Runtime Verify resolution.');
+  }
+  return resolved;
 }
 
 function canonicalReportUrl(apiUrl: URL, report: RuntimeVerifyReport): string {

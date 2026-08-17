@@ -1,7 +1,11 @@
 import type { RuntimeVerifyReport } from './report';
 import { escapeMarkdown } from './redaction';
 
-export function runtimeSummary(report: RuntimeVerifyReport, reportUrl: string): string {
+export function runtimeSummary(
+  report: RuntimeVerifyReport,
+  reportUrl: string,
+  resolution: 'Automatic' | 'Explicit'
+): string {
   const byRule = new Map<string, number>();
   for (const item of report.findings) byRule.set(item.ruleId, (byRule.get(item.ruleId) ?? 0) + 1);
   const lines = [
@@ -10,7 +14,9 @@ export function runtimeSummary(report: RuntimeVerifyReport, reportUrl: string): 
     `| Runtime Verify status | ${escapeMarkdown(report.status)} |`,
     `| Gate result | ${escapeMarkdown(report.gateResult)} |`,
     `| Environment ID | ${escapeMarkdown(report.environmentId)} |`,
+    `| Deployment | ${escapeMarkdown(report.deployment.releaseIdentifier ?? '—')} |`,
     `| Contract Guard check ID | ${escapeMarkdown(report.contractGuardCheckId)} |`,
+    `| Resolution | ${resolution} |`,
     `| Run ID | ${escapeMarkdown(report.runId)} |`,
     `| Contract hash match | ${report.contract.hashMatched ? 'yes' : 'no'} |`,
     `| Configured operations | ${report.summary.configuredOperations} |`,

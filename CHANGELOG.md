@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-17
+
+### Added
+
+- Runtime Verify now asks Alconite to resolve the approved Contract Guard check for the exact deployed contract when `check-id` is omitted and exposes the check actually used.
+- Added deployment-stage automatic-resolution and advanced `workflow_dispatch` examples, plus a `deployment-id` output and concise resolution details in the job summary.
+
+### Changed
+
+- The recommended lifecycle is now pull request → Contract Guard → Impact, followed by deployment → Runtime Verify, without carrying an internal check identifier between workflows.
+- Runtime Verify's default idempotency identity now separates the deployed software identity from the requested operation and does not depend on `github.run_id`.
+- Updated repository-wide Action metadata, examples, reusable workflows, runner identities, and generated distributions to v2.3.0.
+
+### Compatibility
+
+- Existing Runtime Verify workflows that explicitly provide `check-id` remain fully supported with the same validation and platform authorization semantics.
+- Roll out the additive platform API before publishing this Action release; v2.2.0 clients remain compatible throughout because they continue sending an explicit ID.
+
+### Security
+
+- Automatic resolution remains platform-authoritative and is bound to the token-authorized project, environment, exact contract identity, and a retained approved Contract Guard result; it never searches GitHub history or falls back to the latest check.
+
+### Documentation
+
+- Documented the PR and deployment lifecycle, trusted-fork restriction, caller-owned Impact report retention, automatic Runtime Verify baseline selection, and manual explicit-check workflow.
+
 ## [2.2.0] - 2026-08-11
 
 ### Added

@@ -1,0 +1,38 @@
+name: Manually verify a specific approval
+
+on:
+  workflow_dispatch:
+    inputs:
+      check-id:
+        description: Exact Contract Guard approval to replay or diagnose
+        required: true
+        type: string
+      deployment-id:
+        description: Deployed software identifier
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-verify:
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify a specific approved check
+        uses: alconite-inc/alconite-actions/runtime-verify@v2.3.0
+        with:
+          project-id: ${{ secrets.ALCONITE_PROJECT_ID }}
+          project-token: ${{ secrets.ALCONITE_PROJECT_TOKEN }}
+          environment-id: ${{ vars.ALCONITE_RUNTIME_ENVIRONMENT_ID }}
+          check-id: ${{ inputs.check-id }}
+          base-url: https://example.com
+          contract-path: openapi/api.yaml
+          configuration-path: .alconite/runtime-verify.yaml
+          deployment-id: ${{ inputs.deployment-id }}
+          display-name: manual-${{ inputs.deployment-id }}
+          fail-on: failed
