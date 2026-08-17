@@ -5,7 +5,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { sha256 } from '../../src/runtime-verify/redaction';
+import { platformContractContentHash } from '../../src/runtime-verify/openapi';
 
 interface Scenario {
   targetStatus?: number;
@@ -15,6 +15,11 @@ interface Scenario {
   gateResult?: 'passed' | 'passed_with_warnings' | 'failed';
   failOn?: 'failed' | 'warnings' | 'never';
   maximumOperations?: number;
+  explicitCheckId?: boolean;
+  omitResolvedCheckId?: boolean;
+  noApprovedCheck?: boolean;
+  omitReportPath?: boolean;
+  deploymentId?: string;
 }
 
 interface ScenarioResult {
@@ -29,6 +34,7 @@ interface ScenarioResult {
   failureCalls: number;
   uploadedResult?: any;
   initiation?: any;
+  idempotencyKey?: string;
 }
 
 const projectToken = 'alc_cg_plaintext_example';
@@ -58,7 +64,9 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
   await writeFile(path.join(directory, 'runtime.yaml'), configurationText);
   const outputPath = path.join(directory, 'output.txt');
   const summaryPath = path.join(directory, 'summary.md');
-  const reportPath = path.join(directory, 'report.json');
+  const reportPath = scenario.omitReportPath
+    ? path.join(directory, 'alconite-runtime-verify-report.json')
+    : path.join(directory, 'report.json');
   await writeFile(outputPath, ''); await writeFile(summaryPath, '');
   let targetCalls = 0;
   const targetServer = createServer((request, reply) => {
@@ -72,7 +80,8 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
   let failureCalls = 0;
   let uploadedResult: any;
   let initiation: any;
-  const localHash = sha256(Buffer.from(contractText));
+  let idempotencyKey: string | undefined;
+  const localHash = platformContractContentHash(Buffer.from(contractText));
   const expectedHash = scenario.expectedHash ?? localHash;
   const canonicalReport = (body: any, selectedGate?: Scenario['gateResult']) => {
     const submitted = (body.findings ?? []).map((item: any, index: number) => ({
@@ -117,9 +126,10 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
       },
       deployment: {
         provider: 'github-actions', repository: 'owner/repository', commitSha: 'abc', ref: 'refs/heads/main', workflow: 'Deploy',
-        workflowRunId: '123', workflowRunAttempt: 1, releaseIdentifier: null
+        workflowRunId: '123', workflowRunAttempt: 1,
+        releaseIdentifier: initiation?.deployment?.releaseIdentifier ?? null
       },
-      runner: { name: 'alconite-runtime-verify-action', version: '2.2.0', operatingSystem: 'Linux', architecture: 'X64' },
+      runner: { name: 'alconite-runtime-verify-action', version: '2.3.0', operatingSystem: 'Linux', architecture: 'X64' },
       summary: {
         ...body.execution,
         informationalFindings: submitted.filter((item: any) => item.classification === 'informational').length
@@ -144,6 +154,17 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
         return;
       }
       initiation = body;
+      idempotencyKey = request.headers['idempotency-key'] as string | undefined;
+      if (scenario.noApprovedCheck) {
+        reply.statusCode = 409;
+        reply.end(JSON.stringify({
+          error: {
+            code: 'approved_contract_check_not_found',
+            message: 'untrusted detail'
+          }
+        }));
+        return;
+      }
       const replayReport = canonicalReport({
         contract: { localContentHash: localHash, matchedApprovedCandidate: true },
         execution: {
@@ -152,28 +173,32 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
         },
         findings: []
       }, 'passed');
+      const resolution = scenario.omitResolvedCheckId ? {} : { contractGuardCheckId: checkId };
       reply.end(JSON.stringify(scenario.replay
-        ? { runId, status: 'completed', expectedContractContentHash: localHash, replayed: true,
+        ? { runId, status: 'completed', ...resolution, expectedContractContentHash: localHash, replayed: true,
             limits: { maximumOperations: 100, maximumFindings: 500, maximumResultBytes: 5_242_880, maximumResponseBytes: 1_048_576 }, report: replayReport }
-        : { runId, status: 'pending', expectedContractContentHash: expectedHash, replayed: false,
+        : { runId, status: 'pending', ...resolution, expectedContractContentHash: expectedHash, replayed: false,
             limits: { maximumOperations: scenario.maximumOperations ?? 100, maximumFindings: 500, maximumResultBytes: 5_242_880, maximumResponseBytes: 1_048_576 },
             report: null }));
     });
   });
   const platformUrl = await listen(platformServer);
   try {
+    const childEnvironment: NodeJS.ProcessEnv = {
+      ...process.env, GITHUB_WORKSPACE: directory, RUNNER_TEMP: directory, GITHUB_OUTPUT: outputPath, GITHUB_STEP_SUMMARY: summaryPath,
+      GITHUB_REPOSITORY: 'owner/repository', GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1', GITHUB_SHA: 'abc',
+      GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW: 'Deploy', RUNNER_OS: 'Linux', RUNNER_ARCH: 'X64',
+      'INPUT_PROJECT-ID': projectId, 'INPUT_PROJECT-TOKEN': projectToken,
+      'INPUT_ENVIRONMENT-ID': environmentId,
+      'INPUT_BASE-URL': targetUrl.toString(), 'INPUT_CONTRACT-PATH': 'openapi.yaml', 'INPUT_CONFIGURATION-PATH': 'runtime.yaml',
+      'INPUT_API-URL': platformUrl.toString(), 'INPUT_FAIL-ON': scenario.failOn ?? 'failed', 'INPUT_RETRY-ATTEMPTS': '1',
+      'INPUT_DEPLOYMENT-ID': scenario.deploymentId ?? 'deployment-abc', STAGING_API_AUTHORIZATION: targetSecret
+    };
+    if (scenario.explicitCheckId) childEnvironment['INPUT_CHECK-ID'] = checkId;
+    if (!scenario.omitReportPath) childEnvironment['INPUT_REPORT-PATH'] = reportPath;
     const child = spawn(process.execPath, [path.resolve('runtime-verify/dist/index.js')], {
       cwd: path.resolve('.'),
-      env: {
-        ...process.env, GITHUB_WORKSPACE: directory, RUNNER_TEMP: directory, GITHUB_OUTPUT: outputPath, GITHUB_STEP_SUMMARY: summaryPath,
-        GITHUB_REPOSITORY: 'owner/repository', GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1', GITHUB_SHA: 'abc',
-        GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW: 'Deploy', RUNNER_OS: 'Linux', RUNNER_ARCH: 'X64',
-        'INPUT_PROJECT-ID': projectId, 'INPUT_PROJECT-TOKEN': projectToken,
-        'INPUT_ENVIRONMENT-ID': environmentId, 'INPUT_CHECK-ID': checkId,
-        'INPUT_BASE-URL': targetUrl.toString(), 'INPUT_CONTRACT-PATH': 'openapi.yaml', 'INPUT_CONFIGURATION-PATH': 'runtime.yaml',
-        'INPUT_API-URL': platformUrl.toString(), 'INPUT_FAIL-ON': scenario.failOn ?? 'failed', 'INPUT_RETRY-ATTEMPTS': '1',
-        'INPUT_REPORT-PATH': reportPath, STAGING_API_AUTHORIZATION: targetSecret
-      }, stdio: ['ignore', 'pipe', 'pipe']
+      env: childEnvironment, stdio: ['ignore', 'pipe', 'pipe']
     });
     let stdout = ''; let stderr = '';
     child.stdout.setEncoding('utf8').on('data', chunk => { stdout += chunk; });
@@ -183,23 +208,28 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
     const summary = await readFile(summaryPath, 'utf8');
     let report: any;
     try { report = JSON.parse(await readFile(reportPath, 'utf8')); } catch { /* processing failure has no report */ }
-    return { exitCode, stdout, stderr, output, summary, report, targetCalls, resultCalls, failureCalls, uploadedResult, initiation };
+    return { exitCode, stdout, stderr, output, summary, report, targetCalls, resultCalls, failureCalls, uploadedResult, initiation, idempotencyKey };
   } finally {
     await close(targetServer); await close(platformServer);
   }
 }
 
 test('end-to-end passing action writes safe outputs, summary, and canonical report', async () => {
-  const result = await runScenario();
+  const result = await runScenario({ omitReportPath: true });
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(result.targetCalls, 1); assert.equal(result.resultCalls, 1);
   assert.match(result.output, /gate-result<<[^\n]+\npassed\n/);
   assert.match(result.output, /report-path<<[^\n]+\n/);
+  assert.match(result.output, /check-id<<[^\n]+\ncgchk_22222222222222222222222222222222\n/);
+  assert.match(result.output, /deployment-id<<[^\n]+\ndeployment-abc\n/);
   assert.match(result.summary, /Alconite Runtime Verify/);
+  assert.match(result.summary, /Resolution \| Automatic/);
   assert.equal(result.report?.runId, runId);
   assert.equal(result.uploadedResult?.schema, 'alconite.runtime-verify.runner-result.v1');
   assert.equal(Object.hasOwn(result.uploadedResult ?? {}, 'schemaVersion'), false);
   assert.equal(Object.hasOwn(result.initiation ?? {}, 'baseUrl'), false);
+  assert.equal(Object.hasOwn(result.initiation ?? {}, 'contractGuardCheckId'), false);
+  assert.match(result.idempotencyKey ?? '', /^runtime-gh-v2-[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(result.initiation).includes('127.0.0.1'), false);
   assert.equal(JSON.stringify(result.uploadedResult).includes(targetSecret), false);
   assert.equal(JSON.stringify(result.uploadedResult).includes('healthy'), false);
@@ -208,6 +238,24 @@ test('end-to-end passing action writes safe outputs, summary, and canonical repo
   assert.equal(result.stderr.includes(projectToken) || result.stderr.includes(targetSecret), false);
   assert.equal(result.output.includes(projectToken) || result.output.includes(targetSecret), false);
   assert.equal(result.summary.includes(projectToken) || result.summary.includes(targetSecret), false);
+});
+
+test('explicit check-id remains compatible when an older initiation response omits the resolved field', async () => {
+  const result = await runScenario({ explicitCheckId: true, omitResolvedCheckId: true });
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(result.initiation?.contractGuardCheckId, checkId);
+  assert.match(result.summary, /Resolution \| Explicit/);
+  assert.match(result.output, /check-id<<[^\n]+\ncgchk_22222222222222222222222222222222\n/);
+});
+
+test('automatic resolution failure is actionable and never calls the target', async () => {
+  const result = await runScenario({ noApprovedCheck: true });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.targetCalls, 0);
+  assert.equal(result.resultCalls, 0);
+  assert.equal(result.report, undefined);
+  assert.match(result.stdout, /No approved Contract Guard check exists for the deployed contract/);
+  assert.doesNotMatch(result.stdout, /untrusted detail/);
 });
 
 test('end-to-end failed target obeys fail-on failed', async () => {

@@ -12,8 +12,9 @@ on:
         required: true
         type: string
       check-id:
-        description: Approved Contract Guard check identifier.
-        required: true
+        description: Optional approved Contract Guard check identifier; omitted values use exact-contract automatic resolution.
+        required: false
+        default: ""
         type: string
       base-url:
         description: Customer API HTTPS origin.
@@ -52,12 +53,21 @@ on:
       run-id:
         description: Stable Runtime Verify run identifier.
         value: ${{ jobs.runtime.outputs.run-id }}
+      check-id:
+        description: Contract Guard check used as the approved runtime baseline.
+        value: ${{ jobs.runtime.outputs.check-id }}
+      deployment-id:
+        description: Deployment identifier verified by Runtime Verify.
+        value: ${{ jobs.runtime.outputs.deployment-id }}
       gate-result:
         description: Platform-computed gate result.
         value: ${{ jobs.runtime.outputs.gate-result }}
       report-url:
         description: Canonical Alconite report URL.
         value: ${{ jobs.runtime.outputs.report-url }}
+      report-path:
+        description: Absolute path to the generated Runtime Verify report within the reusable job.
+        value: ${{ jobs.runtime.outputs.report-path }}
 
 permissions:
   contents: read
@@ -67,8 +77,11 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       run-id: ${{ steps.verify.outputs.run-id }}
+      check-id: ${{ steps.verify.outputs.check-id }}
+      deployment-id: ${{ steps.verify.outputs.deployment-id }}
       gate-result: ${{ steps.verify.outputs.gate-result }}
       report-url: ${{ steps.verify.outputs.report-url }}
+      report-path: ${{ steps.verify.outputs.report-path }}
     steps:
       - name: Check out caller repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -77,7 +90,7 @@ jobs:
 
       - name: Verify deployed API
         id: verify
-        uses: alconite-inc/alconite-actions/runtime-verify@v2.2.0
+        uses: alconite-inc/alconite-actions/runtime-verify@v2.3.0
         with:
           project-id: ${{ inputs.project-id }}
           project-token: ${{ secrets.project-token }}

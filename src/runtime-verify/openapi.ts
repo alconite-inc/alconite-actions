@@ -49,7 +49,12 @@ export async function loadOpenApi(requestedPath: string, workspace: string): Pro
     throw new RuntimeVerifyError('invalid_openapi', 'The selected OpenAPI contract failed structural or local-reference validation.');
   }
   assertUniqueOperationIds(raw);
-  return { path: resolvedPath, contentHash: sha256(bytes), version, document: raw, operationCount: limits.operations };
+  return { path: resolvedPath, contentHash: platformContractContentHash(bytes), version, document: raw, operationCount: limits.operations };
+}
+
+/** Matches the platform parser's contract identity normalization exactly. */
+export function platformContractContentHash(bytes: Buffer): string {
+  return sha256(Buffer.from(bytes.filter(byte => byte !== 0x0d)));
 }
 
 function inspectDocument(root: JsonObject): { operations: number; schemas: number } {

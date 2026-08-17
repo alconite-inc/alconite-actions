@@ -42,7 +42,7 @@ test('GitHub summary escapes Markdown and HTML-sensitive platform values', () =>
       provider: 'github-actions', repository: null, commitSha: null, ref: null, workflow: null,
       workflowRunId: null, workflowRunAttempt: null, releaseIdentifier: null
     },
-    runner: { name: 'runner', version: '2.2.0', operatingSystem: 'linux', architecture: 'x64' },
+    runner: { name: 'runner', version: '2.3.0', operatingSystem: 'linux', architecture: 'x64' },
     summary: {
       configuredOperations: 1, executedOperations: 1, passedOperations: 0, failedOperations: 1, warningOperations: 0,
       informationalFindings: 0, totalDurationMilliseconds: 1
@@ -54,7 +54,7 @@ test('GitHub summary escapes Markdown and HTML-sensitive platform values', () =>
       expected: null, actual: null, durationMilliseconds: 1, createdAt: 1 }],
     createdAt: 1, completedAt: 2, reportUrl: '/runtime/report'
   };
-  const summary = runtimeSummary(report, 'https://alconite.com/report');
+  const summary = runtimeSummary(report, 'https://alconite.com/report', 'Automatic');
   assert.doesNotMatch(summary, /<unsafe>/);
   assert.match(summary, /&lt;unsafe&gt;/);
   assert.match(summary, /get\\\|Health/);

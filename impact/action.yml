@@ -75,7 +75,7 @@ outputs:
   client-files-skipped:
     description: Number of file entries skipped by the runner collector.
   report-path:
-    description: Absolute path to a fresh private report file below verified RUNNER_TEMP.
+    description: Absolute path to the generated Impact JSON report below verified RUNNER_TEMP. Can be uploaded as a GitHub Actions artifact or consumed by later workflow steps.
   report-truncated:
     description: Whether bounded response packing omitted locations, evidence, or warnings.
   analysis-fingerprint:

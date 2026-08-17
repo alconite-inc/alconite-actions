@@ -6,7 +6,7 @@ import {
   validateSelfReferences,
 } from '../scripts/release-policy.mjs';
 
-const currentVersion = '2.2.0';
+const currentVersion = '2.3.0';
 const currentTag = `v${currentVersion}`;
 const mixedCasePrefix = ['AlCoNiTe-InC', 'AlCoNiTe-AcTiOnS'].join('/');
 
@@ -73,7 +73,7 @@ test('release policy accepts only the current self-reference outside labeled his
     'a'.repeat(40),
     'feature/old-release',
     currentTag,
-    `v${['2', '2', '1'].join('.')}`,
+    `v${['2', '3', '1'].join('.')}`,
     `v${['1', '9', '9'].join('.')}`,
   ];
   for (const ref of invalidHistoricalRefs) {

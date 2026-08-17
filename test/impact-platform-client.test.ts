@@ -85,7 +85,7 @@ test('posts the strict check-linked request with masked-token-compatible bearer 
     observedBody = String(init?.body);
     assert.equal(init?.method, 'POST');
     assert.equal((init?.headers as Record<string, string>).authorization, `Bearer ${TOKEN}`);
-    assert.equal((init?.headers as Record<string, string>)['user-agent'], 'alconite-impact-action/2.2.0');
+    assert.equal((init?.headers as Record<string, string>)['user-agent'], 'alconite-impact-action/2.3.0');
     assert.equal(init?.redirect, 'manual');
     return new Response(JSON.stringify(await responseFixture()), { status: 200, headers: { 'content-type': 'application/json' } });
   };

@@ -7,7 +7,7 @@ export interface RuntimeVerifyInputs {
   projectId: string;
   projectToken: string;
   environmentId: string;
-  checkId: string;
+  checkId?: string;
   baseUrl: URL;
   contractPath: string;
   configurationPath: string;
@@ -32,7 +32,8 @@ export function readInputs(): RuntimeVerifyInputs {
   const projectToken = getInput('project-token', { required: true });
   if (!/^alc_cg_[A-Za-z0-9_-]{1,240}$/.test(projectToken)) throw inputError('Project token must be a bounded alc_cg_ token.');
   const environmentId = identifier(getInput('environment-id', { required: true }), 'environment ID', IDENTIFIERS.environmentId);
-  const checkId = identifier(getInput('check-id', { required: true }), 'check ID', IDENTIFIERS.checkId);
+  const rawCheckId = getInput('check-id');
+  const checkId = rawCheckId ? identifier(rawCheckId, 'check ID', IDENTIFIERS.checkId) : undefined;
   const displayName = optionalBounded(getInput('display-name'), 'Display name', 160);
   const deploymentId = optionalBounded(getInput('deployment-id'), 'Deployment ID', 200);
   const idempotencyKey = optionalBounded(getInput('idempotency-key'), 'Idempotency key', 200);
@@ -40,7 +41,7 @@ export function readInputs(): RuntimeVerifyInputs {
     projectId,
     projectToken,
     environmentId,
-    checkId,
+    ...(checkId ? { checkId } : {}),
     baseUrl: validateOrigin(getInput('base-url', { required: true }), 'Target base URL'),
     contractPath: getInput('contract-path') || 'openapi.yaml',
     configurationPath: getInput('configuration-path') || '.alconite/runtime-verify.yaml',
@@ -70,11 +71,13 @@ export function validateOrigin(raw: string, label: string): URL {
 export function deriveIdempotencyKey(inputs: RuntimeVerifyInputs, contractHash: string, configurationHash: string, environment = process.env): string {
   if (inputs.idempotencyKey) return inputs.idempotencyKey;
   const material = [
-    'runtime-gh-v1', environment.GITHUB_REPOSITORY ?? 'local', environment.GITHUB_RUN_ID ?? 'local',
-    environment.GITHUB_RUN_ATTEMPT ?? '1', inputs.projectId, inputs.environmentId, inputs.checkId,
-    contractHash, configurationHash, inputs.deploymentId ?? ''
+    'runtime-gh-v2', environment.GITHUB_REPOSITORY ?? 'local',
+    environment.GITHUB_WORKFLOW_REF ?? environment.GITHUB_WORKFLOW ?? 'local',
+    inputs.projectId, inputs.environmentId,
+    inputs.deploymentId ?? environment.GITHUB_SHA ?? 'local', environment.GITHUB_RUN_ATTEMPT ?? '1',
+    inputs.checkId ? `explicit:${inputs.checkId}` : 'automatic', contractHash, configurationHash
   ].join('\n');
-  return `runtime-gh-v1-${sha256(material).slice('sha256:'.length)}`;
+  return `runtime-gh-v2-${sha256(material).slice('sha256:'.length)}`;
 }
 
 function identifier(raw: string, label: string, pattern: RegExp): string {

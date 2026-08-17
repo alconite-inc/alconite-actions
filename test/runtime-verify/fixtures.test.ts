@@ -22,10 +22,12 @@ test('checked-in Runtime Verify OpenAPI and configuration fixtures are valid', a
 test('checked-in platform and response fixtures remain parseable and bounded', async () => {
   const report = validateReport(JSON.parse(await readFile(path.join(fixtures, 'platform/report-passed.json'), 'utf8')));
   const initiation = JSON.parse(await readFile(path.join(fixtures, 'platform/initiation-pending.json'), 'utf8'));
+  const automatic = JSON.parse(await readFile(path.join(fixtures, 'platform/initiation-automatic.json'), 'utf8'));
   const runnerResult = JSON.parse(await readFile(path.join(fixtures, 'platform/runner-result.json'), 'utf8'));
   const cases = JSON.parse(await readFile(path.join(fixtures, 'cases.json'), 'utf8'));
   assert.equal(report.gateResult, 'passed');
   assert.equal(initiation.limits.maximumOperations, 100);
+  assert.equal(automatic.contractGuardCheckId, report.contractGuardCheckId);
   const { schema: _schema, resultDigest, ...runnerInput } = runnerResult;
   assert.equal(createRunnerResult(runnerInput).resultDigest, resultDigest);
   assert.deepEqual(Object.keys(cases).sort(), [

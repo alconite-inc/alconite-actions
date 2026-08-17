@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { stringify } from 'yaml';
-import { loadOpenApi, MAX_CONTRACT_BYTES, MAX_OPENAPI_OPERATIONS, resolveLocalReference } from '../../src/runtime-verify/openapi';
+import { loadOpenApi, MAX_CONTRACT_BYTES, MAX_OPENAPI_OPERATIONS, platformContractContentHash, resolveLocalReference } from '../../src/runtime-verify/openapi';
 
 function contract(version: string): Record<string, unknown> {
   return {
@@ -37,6 +37,12 @@ test('supports local in-document references', async () => {
   value.components = { schemas: { Health: { type: 'object', required: ['status'], properties: { status: { type: 'string' } } } } };
   const loaded = await load(value, '.yaml');
   assert.equal(loaded.operationCount, 1);
+});
+
+test('uses the platform contract fingerprint across LF and CRLF line endings', () => {
+  const lf = Buffer.from('openapi: 3.1.0\ninfo:\n  title: Fixture\n');
+  const crlf = Buffer.from('openapi: 3.1.0\r\ninfo:\r\n  title: Fixture\r\n');
+  assert.equal(platformContractContentHash(lf), platformContractContentHash(crlf));
 });
 
 test('supports OpenAPI 3.1 local JSON Schema anchors', async () => {

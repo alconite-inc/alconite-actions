@@ -14,7 +14,7 @@ const request: InitiationRequest = {
   configurationContentHash: hash, displayName: 'Runtime verification', deployment: {
     provider: 'github-actions', repository: 'owner/repo', commitSha: 'abc', ref: 'refs/heads/main', workflow: 'CI',
     workflowRunId: '1', workflowRunAttempt: 1
-  }, runner: { name: 'alconite-runtime-verify-action', version: '2.2.0', operatingSystem: 'Linux', architecture: 'X64' }
+  }, runner: { name: 'alconite-runtime-verify-action', version: '2.3.0', operatingSystem: 'Linux', architecture: 'X64' }
 };
 const report: RuntimeVerifyReport = {
   schema: 'alconite.runtime-verify.report.v1', runId, projectId, environmentId, contractGuardCheckId: checkId,
@@ -27,7 +27,7 @@ const report: RuntimeVerifyReport = {
     provider: 'github-actions', repository: 'owner/repo', commitSha: 'abc', ref: 'refs/heads/main', workflow: 'CI',
     workflowRunId: '1', workflowRunAttempt: 1, releaseIdentifier: null
   },
-  runner: { name: 'alconite-runtime-verify-action', version: '2.2.0', operatingSystem: 'Linux', architecture: 'X64' },
+  runner: { name: 'alconite-runtime-verify-action', version: '2.3.0', operatingSystem: 'Linux', architecture: 'X64' },
   summary: {
     configuredOperations: 0, executedOperations: 0, passedOperations: 0, failedOperations: 0, warningOperations: 0,
     informationalFindings: 0, totalDurationMilliseconds: 0
@@ -69,7 +69,7 @@ function json(reply: ServerResponse, status: number, body: unknown): void {
 }
 function pending(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    runId, status: 'pending', replayed: false, expectedContractContentHash: hash,
+    runId, status: 'pending', replayed: false, contractGuardCheckId: checkId, expectedContractContentHash: hash,
     limits: { maximumOperations: 10, maximumFindings: 500, maximumResultBytes: 5_242_880, maximumResponseBytes: 1_048_576 },
     report: null,
     ...overrides
@@ -80,14 +80,34 @@ test('initiates with bearer auth, idempotency, required display name, and no tar
   const apiUrl = await mockServer(t, (incoming, reply, body) => {
     assert.equal(incoming.headers.authorization, 'Bearer alc_cg_secret');
     assert.equal(incoming.headers['idempotency-key'], 'runtime-gh-v1-test');
-    assert.equal(incoming.headers['user-agent'], 'alconite-runtime-verify-action/2.2.0');
+    assert.equal(incoming.headers['user-agent'], 'alconite-runtime-verify-action/2.3.0');
     assert.equal(body.displayName, 'Runtime verification');
     assert.equal(JSON.stringify(body).includes('baseUrl'), false);
     json(reply, 200, pending());
   });
   const response = await client(apiUrl).initiate(request, 'runtime-gh-v1-test');
   assert.equal(response.status, 'pending');
+  assert.equal(response.contractGuardCheckId, checkId);
   assert.equal(response.maximumOperations, 10);
+});
+
+test('omits an automatic check request and validates the platform-resolved check', async t => {
+  const { contractGuardCheckId: _explicit, ...automaticRequest } = request;
+  const apiUrl = await mockServer(t, (_incoming, reply, body) => {
+    assert.equal(Object.hasOwn(body, 'contractGuardCheckId'), false);
+    json(reply, 200, pending());
+  });
+  const response = await client(apiUrl).initiate(automaticRequest, 'automatic-key');
+  assert.equal(response.contractGuardCheckId, checkId);
+});
+
+test('retains an explicit request when an older response omits the additive resolved field', async t => {
+  const apiUrl = await mockServer(t, (_incoming, reply, body) => {
+    assert.equal(body.contractGuardCheckId, checkId);
+    json(reply, 200, pending({ contractGuardCheckId: undefined }));
+  });
+  const response = await client(apiUrl).initiate(request, 'explicit-key');
+  assert.equal(response.contractGuardCheckId, undefined);
 });
 
 test('submits the canonical completion envelope, failure, and deterministic result digest on replay', async t => {
@@ -150,6 +170,21 @@ for (const status of [401, 403, 409, 429]) {
     assert.equal(calls, 1);
   });
 }
+
+test('renders only the reviewed automatic-resolution failure message', async t => {
+  const apiUrl = await mockServer(t, (_incoming, reply) => {
+    json(reply, 409, {
+      error: {
+        code: 'approved_contract_check_not_found',
+        message: 'untrusted upstream detail must not be surfaced'
+      }
+    });
+  });
+  await assert.rejects(
+    client(apiUrl).initiate(request, 'key'),
+    /No approved Contract Guard check exists for the deployed contract\. Run Contract Guard against this contract before deploying or provide an explicit check-id\./
+  );
+});
 
 test('identifies the failed platform phase without exposing request data', async t => {
   const apiUrl = await mockServer(t, (_incoming, reply) => {
