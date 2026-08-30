@@ -10,6 +10,25 @@ const CONFIRMED_ABSENCE_LINES = [
   /^(?:error:\s*)?[a-z0-9][a-z0-9.-]*(?::[0-9]+)?(?:\/[a-z0-9._-]+)+(?:@sha256:[a-f0-9]{64}|:[a-z0-9][a-z0-9._-]{0,127}):\s*not found\.?$/iu,
   /^(?:error:\s*)?no such manifest:\s*\S+\.?$/iu,
 ];
+const RELEASE_MANIFEST_COPY = 'docker buildx imagetools create --prefer-index=false --tag "$image:$alias" "$image@$digest"';
+const DOCKER_HUB_VERSION_COPY = 'docker buildx imagetools create --prefer-index=false --tag "$TARGET_IMAGE:$RELEASE_TAG" "$source_image@$digest"';
+const DOCKER_HUB_LATEST_COPY = 'docker buildx imagetools create --prefer-index=false --tag "$TARGET_IMAGE:latest" "$source_image@$digest"';
+
+function occurrenceCount(source, value) {
+  return source.split(value).length - 1;
+}
+
+/** Enforce the three approved manifest-preserving registry copy operations. */
+export function validateManifestPreservingCopies(releaseSource, promotionSource) {
+  const combined = `${releaseSource}\n${promotionSource}`;
+  const allCopies = combined.match(/docker buildx imagetools create\b/gu) ?? [];
+  const preservingCopies = combined.match(/docker buildx imagetools create --prefer-index=false --tag\b/gu) ?? [];
+  assert.equal(allCopies.length, 3, 'exactly three registry manifest copy operations are approved');
+  assert.equal(preservingCopies.length, 3, 'every registry manifest copy must preserve the source manifest format');
+  assert.equal(occurrenceCount(releaseSource, RELEASE_MANIFEST_COPY), 1, 'release aliases must preserve the exact image manifest');
+  assert.equal(occurrenceCount(promotionSource, DOCKER_HUB_VERSION_COPY), 1, 'Docker Hub exact-version promotion must preserve the source manifest');
+  assert.equal(occurrenceCount(promotionSource, DOCKER_HUB_LATEST_COPY), 1, 'Docker Hub latest promotion must preserve the source manifest');
+}
 
 /** Classify an OCI manifest inspection without treating ambiguous failures as absence. */
 export function classifyRegistryInspection(exitCode, diagnostic) {
@@ -75,13 +94,14 @@ async function validateRepositoryContract() {
   assert.equal(promotion.jobs?.promote?.permissions?.contents, 'read');
   assert.equal(Object.keys(promotion.jobs?.promote?.permissions ?? {}).length, 2);
   const promotionSource = workflows[2];
+  validateManifestPreservingCopies(workflows[1], promotionSource);
   assert.equal(promotionSource.includes('docker build '), false, 'Docker Hub promotion must not rebuild');
   assert.equal(promotionSource.includes('docker buildx build '), false, 'Docker Hub promotion must not invoke the Dockerfile');
   assert.match(promotionSource, /\^2\\\./u, 'promotion version must omit a leading v');
   assert.match(promotionSource, /DOCKERHUB_SENTINEL_IMAGE/u);
   assert.match(promotionSource, /registry-inspection-state.*inspection_status/us, 'promotion must classify destination inspection failures');
   assert.match(promotionSource, /present\).*existing.*==.*digest/us, 'promotion must accept only a matching existing exact version');
-  assert.match(promotionSource, /absent\).*imagetools create/us, 'promotion may create the exact version only after confirmed absence');
+  assert.match(promotionSource, /absent\).*imagetools create --prefer-index=false/us, 'promotion may create the exact version only after confirmed absence');
   assert.match(promotionSource, /Unable to prove Docker Hub exact-version state/us, 'promotion must fail closed on unknown registry state');
   assert.match(promotionSource, /exact version already names different immutable content/u);
   assert.match(promotionSource, /PUBLISH_LATEST.*== "true"/us);

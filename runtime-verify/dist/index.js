@@ -26646,7 +26646,7 @@ function writeJobSummary(markdown) {
 }
 
 // src/release.ts
-var ACTION_RELEASE_VERSION = "2.4.0";
+var ACTION_RELEASE_VERSION = "2.4.1";
 var CONTRACT_GUARD_USER_AGENT = `alconite-contract-guard-action/${ACTION_RELEASE_VERSION}`;
 var IMPACT_USER_AGENT = `alconite-impact-action/${ACTION_RELEASE_VERSION}`;
 var RUNTIME_VERIFY_USER_AGENT = `alconite-runtime-verify-action/${ACTION_RELEASE_VERSION}`;
