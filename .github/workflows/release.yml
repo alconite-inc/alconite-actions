@@ -169,7 +169,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          printf '## Sentinel executor image\n\n`%s@%s`\n\nTags: `%s`, `%s`, `%s`, `%s`, `latest`\n' \
+          printf "## Sentinel executor image\n\n\`%s@%s\`\n\nTags: \`%s\`, \`%s\`, \`%s\`, \`%s\`, \`latest\`\n" \
             "$SUBJECT_NAME" "$SUBJECT_DIGEST" "$RELEASE_TAG" "$version" "${version%.*}" "${version%%.*}" >> "$GITHUB_STEP_SUMMARY"
       - name: Create GitHub release
         shell: bash

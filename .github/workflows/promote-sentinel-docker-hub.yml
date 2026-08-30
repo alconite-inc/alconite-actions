@@ -108,7 +108,7 @@ jobs:
           if [[ "$PUBLISH_LATEST" == "true" ]]; then tags="$tags, latest"; fi
           {
             printf '## Sentinel Docker Hub promotion\n\n'
-            printf -- '- Source: `%s:%s` (`%s`)\n' "$source_image" "$RELEASE_TAG" "$digest"
-            printf -- '- Destination: `%s` tags `%s` (`%s`)\n' "$TARGET_IMAGE" "$tags" "$actual"
+            printf -- "- Source: \`%s:%s\` (\`%s\`)\n" "$source_image" "$RELEASE_TAG" "$digest"
+            printf -- "- Destination: \`%s\` tags \`%s\` (\`%s\`)\n" "$TARGET_IMAGE" "$tags" "$actual"
             printf -- '- Status: completed without rebuilding\n'
           } >> "$GITHUB_STEP_SUMMARY"
