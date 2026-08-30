@@ -27,6 +27,10 @@ Do not include live project tokens, registry credentials, customer contracts, or
 - Supply Runtime Verify target credentials only through explicitly named runner environment variables; never place them in Action inputs or checked-in configuration values.
 - Run Runtime Verify only in trusted post-deployment jobs. The target API is called from the customer runner, not from Alconite.
 - Keep redirects disabled unless the target requires same-origin redirects, and do not expose deployment secrets to untrusted fork workflows.
+- Run the Sentinel image as its built-in nonroot user with a read-only root, `--cap-drop ALL`, `--security-opt no-new-privileges`, a read-only `/workspace` bind, writable `/reports`, and `/tmp` supplied as `rw,noexec,nosuid,nodev` tmpfs.
+- Supply a fresh Contract Guard or Runtime Verify report destination for each invocation. Portable execution stages these reports privately and creates the final `/reports` file with exclusive no-follow descriptor checks; existing files, links, and ambiguous path replacement fail closed.
+- Supply the container project token only as `ALCONITE_PROJECT_TOKEN`. Treat stdout as a one-line machine result and stderr as bounded diagnostics; never place credentials in arguments, report paths, labels, build arguments, or image layers.
+- Prefer the immutable `v2.x.y` GHCR tag or verified digest. Docker Hub promotion must copy that GHCR digest through the protected `docker-hub` environment and must not rebuild the image.
 
 Runtime Verify submits bounded status, media-type, timing, size, hash, and finding metadata. It must not submit the target origin, expanded URLs, target request/response header values, response bodies, environment values, local paths, GitHub tokens, or runner diagnostic dumps. Reports that violate this boundary are security issues and should be reported privately.
 

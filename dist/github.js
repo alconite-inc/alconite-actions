@@ -24,6 +24,14 @@ function command(name, message, properties = {}) {
         .join(',');
     process.stdout.write(`::${name}${serialized ? ` ${serialized}` : ''}::${commandEscape(message)}\n`);
 }
+function portableMode() {
+    return process.env.ALCONITE_EXECUTION_MODE === 'portable';
+}
+function portableDiagnostic(level, message, title) {
+    const normalized = message.replaceAll('\r', ' ').replaceAll('\n', ' ').slice(0, 8_192);
+    const prefix = title ? `${level} [${title.slice(0, 160)}]` : level;
+    process.stderr.write(`${prefix}: ${normalized}\n`);
+}
 function getInput(name, options = {}) {
     const key = `INPUT_${name.replaceAll(' ', '_').toUpperCase()}`;
     const value = (process.env[key] || '').trim();
@@ -32,10 +40,19 @@ function getInput(name, options = {}) {
     return value;
 }
 function setSecret(value) {
+    if (portableMode())
+        return;
     if (value)
         command('add-mask', value);
 }
 function setOutput(name, value) {
+    if (portableMode()) {
+        const descriptor = Number(process.env.ALCONITE_PORTABLE_OUTPUT_FD);
+        if (!Number.isInteger(descriptor) || descriptor < 3)
+            throw new Error('Portable output channel is unavailable.');
+        (0, node_fs_1.appendFileSync)(descriptor, `${JSON.stringify({ name, value })}\n`, { encoding: 'utf8' });
+        return;
+    }
     const outputFile = process.env.GITHUB_OUTPUT;
     if (!outputFile) {
         command('set-output', value, { name });
@@ -45,15 +62,31 @@ function setOutput(name, value) {
     (0, node_fs_1.appendFileSync)(outputFile, `${name}<<${delimiter}\n${value}\n${delimiter}\n`, { encoding: 'utf8' });
 }
 function info(message) {
+    if (portableMode()) {
+        portableDiagnostic('info', message);
+        return;
+    }
     process.stdout.write(`${message}\n`);
 }
 function notice(message, title) {
+    if (portableMode()) {
+        portableDiagnostic('notice', message, title);
+        return;
+    }
     command('notice', message, title ? { title } : {});
 }
 function warning(message, title) {
+    if (portableMode()) {
+        portableDiagnostic('warning', message, title);
+        return;
+    }
     command('warning', message, title ? { title } : {});
 }
 function error(message, title) {
+    if (portableMode()) {
+        portableDiagnostic('error', message, title);
+        return;
+    }
     command('error', message, title ? { title } : {});
 }
 function setFailed(message) {
@@ -77,6 +110,8 @@ function markdownTable(headers, rows) {
     ].join('\n');
 }
 function writeJobSummary(markdown) {
+    if (portableMode())
+        return;
     const summaryFile = process.env.GITHUB_STEP_SUMMARY;
     if (summaryFile)
         (0, node_fs_1.appendFileSync)(summaryFile, markdown, { encoding: 'utf8' });

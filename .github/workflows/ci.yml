@@ -57,6 +57,53 @@ jobs:
       - name: Lint workflows and embedded shell
         run: actionlint -color
 
+  sentinel-image:
+    name: Sentinel image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          package-manager-cache: false
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Test portable runner source
+        run: |
+          npm ci
+          npm test
+          npm run validate:sentinel-container
+      - name: Build reviewed linux/amd64 image
+        env:
+          IMAGE_REVISION: ${{ github.sha }}
+        run: |
+          docker buildx build --load --platform linux/amd64 \
+            --file sentinel-executor/Dockerfile \
+            --tag alconite/sentinel-executor:2.4.0-ci \
+            --build-arg IMAGE_VERSION=2.4.0 \
+            --build-arg IMAGE_REVISION="$IMAGE_REVISION" \
+            --build-arg IMAGE_CREATED="$(git show -s --format=%cI HEAD)" .
+      - name: Test hardened image
+        run: node scripts/test-sentinel-container.mjs alconite/sentinel-executor:2.4.0-ci
+      - name: Generate SPDX JSON SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: alconite/sentinel-executor:2.4.0-ci
+          format: spdx-json
+          output-file: sentinel-executor.spdx.json
+          upload-artifact: false
+      - name: Scan operating-system and language packages
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: alconite/sentinel-executor:2.4.0-ci
+          fail-build: true
+          severity-cutoff: high
+
   java-action:
     name: Java action fixture
     runs-on: ubuntu-24.04
