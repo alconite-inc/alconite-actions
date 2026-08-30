@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-08-30
+
+### Fixed
+
+- Preserve the tested single-platform Sentinel image manifest when creating GHCR aliases and when manually promoting the selected digest to Docker Hub.
+- Require every approved registry copy operation to retain the source manifest format and fail validation if a copy site is removed or added.
+
+### Compatibility
+
+- Keep GHCR and future Docker Hub version tags on the same image digest without wrapping the source manifest in a new OCI index.
+- Version 2.4.1 is the first complete Sentinel container release and the version to select for future Docker Hub promotion.
+
 ## [2.4.0] - 2026-08-30
 
 ### Added

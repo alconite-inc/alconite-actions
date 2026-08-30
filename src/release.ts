@@ -1,5 +1,5 @@
 /** The repository-wide Action release carried by the current tag. */
-export const ACTION_RELEASE_VERSION = '2.4.0';
+export const ACTION_RELEASE_VERSION = '2.4.1';
 
 /** Stable outbound identity for the Contract Guard component. */
 export const CONTRACT_GUARD_USER_AGENT = `alconite-contract-guard-action/${ACTION_RELEASE_VERSION}`;

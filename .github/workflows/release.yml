@@ -142,7 +142,7 @@ jobs:
           digest="$(docker buildx imagetools inspect "$image:$RELEASE_TAG" --format '{{json .Manifest.Digest}}' | tr -d '"')"
           [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::Published Sentinel digest is invalid"; exit 1; }
           for alias in "$version" "$minor" "$major" latest; do
-            docker buildx imagetools create --tag "$image:$alias" "$image@$digest"
+            docker buildx imagetools create --prefer-index=false --tag "$image:$alias" "$image@$digest"
             actual="$(docker buildx imagetools inspect "$image:$alias" --format '{{json .Manifest.Digest}}' | tr -d '"')"
             [[ "$actual" == "$digest" ]] || { echo "::error::Alias $alias did not resolve to $digest"; exit 1; }
           done

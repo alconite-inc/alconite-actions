@@ -5,20 +5,60 @@ import {
   validateChangelog,
   validateSelfReferences,
 } from '../scripts/release-policy.mjs';
-import { classifyRegistryInspection } from '../scripts/validate-sentinel-container.mjs';
+import {
+  classifyRegistryInspection,
+  validateManifestPreservingCopies,
+} from '../scripts/validate-sentinel-container.mjs';
 
-const currentVersion = '2.4.0';
+const currentVersion = '2.4.1';
 const currentTag = `v${currentVersion}`;
 const mixedCasePrefix = ['AlCoNiTe-InC', 'AlCoNiTe-AcTiOnS'].join('/');
+
+const releaseManifestCopy = 'docker buildx imagetools create --prefer-index=false --tag "$image:$alias" "$image@$digest"';
+const dockerHubVersionCopy = 'docker buildx imagetools create --prefer-index=false --tag "$TARGET_IMAGE:$RELEASE_TAG" "$source_image@$digest"';
+const dockerHubLatestCopy = 'docker buildx imagetools create --prefer-index=false --tag "$TARGET_IMAGE:latest" "$source_image@$digest"';
+
+test('registry copies preserve manifests at exactly the three approved sites', () => {
+  const releaseSource = `for alias in tags; do\n  ${releaseManifestCopy}\ndone`;
+  const promotionSource = `case absent in\n  ${dockerHubVersionCopy}\nesac\nif latest; then\n  ${dockerHubLatestCopy}\nfi`;
+  assert.doesNotThrow(() => validateManifestPreservingCopies(releaseSource, promotionSource));
+
+  for (const command of [releaseManifestCopy, dockerHubVersionCopy, dockerHubLatestCopy]) {
+    assert.throws(
+      () => validateManifestPreservingCopies(
+        releaseSource.replace(command, ''),
+        promotionSource.replace(command, ''),
+      ),
+      /exactly three/u,
+      `removing approved manifest copy must fail: ${command}`,
+    );
+  }
+  assert.throws(
+    () => validateManifestPreservingCopies(
+      `${releaseSource}\n${releaseManifestCopy}`,
+      promotionSource,
+    ),
+    /exactly three/u,
+    'adding a fourth manifest copy site must fail',
+  );
+  assert.throws(
+    () => validateManifestPreservingCopies(
+      releaseSource.replace('--prefer-index=false ', ''),
+      promotionSource,
+    ),
+    /every registry manifest copy/u,
+    'dropping manifest preservation must fail',
+  );
+});
 
 test('registry manifest inspection distinguishes confirmed absence from ambiguous failures', () => {
   assert.equal(classifyRegistryInspection(0, '"sha256:' + 'a'.repeat(64) + '"'), 'present');
   for (const diagnostic of [
     'manifest unknown: manifest unknown',
     'unexpected status from HEAD request: 404 Not Found',
-    'ERROR: unexpected status from HEAD request to https://ghcr.io/v2/alconite-inc/sentinel-executor/manifests/v2.4.0: 404 Not Found',
-    'ghcr.io/alconite-inc/sentinel-executor:v2.4.0: not found',
-    'ERROR: docker.io/alconite/sentinel-executor:2.4.0: not found',
+    'ERROR: unexpected status from HEAD request to https://ghcr.io/v2/alconite-inc/sentinel-executor/manifests/v2.4.1: 404 Not Found',
+    'ghcr.io/alconite-inc/sentinel-executor:v2.4.1: not found',
+    'ERROR: docker.io/alconite/sentinel-executor:2.4.1: not found',
     'response status code: 404 Not Found',
   ]) {
     assert.equal(classifyRegistryInspection(1, diagnostic), 'absent', diagnostic);
@@ -32,7 +72,7 @@ test('registry manifest inspection distinguishes confirmed absence from ambiguou
     'unauthorized: authentication required; unexpected status from HEAD request: 404 Not Found',
     'failed to authorize: token endpoint returned 404 Not Found',
     'unexpected status from HEAD request: 503 Service Unavailable; 404 Not Found',
-    'warning: registry response was ambiguous\nghcr.io/alconite-inc/sentinel-executor:v2.4.0: not found',
+    'warning: registry response was ambiguous\nghcr.io/alconite-inc/sentinel-executor:v2.4.1: not found',
     'something: not found',
     '',
   ]) {
@@ -104,7 +144,7 @@ test('release policy accepts only the current self-reference outside labeled his
     'a'.repeat(40),
     'feature/old-release',
     currentTag,
-    `v${['2', '4', '1'].join('.')}`,
+    `v${['2', '4', '2'].join('.')}`,
     `v${['1', '9', '9'].join('.')}`,
   ];
   for (const ref of invalidHistoricalRefs) {

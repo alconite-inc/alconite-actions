@@ -12,7 +12,7 @@ assert.deepEqual(inspect.Config.Entrypoint, ['/nodejs/bin/node', '/opt/sentinel/
 assert.equal(inspect.Config.WorkingDir, '/workspace');
 assert.equal(inspect.Config.Healthcheck, undefined);
 assert.equal(inspect.Config.ExposedPorts, undefined);
-assert.equal(inspect.Config.Labels['org.opencontainers.image.version'], '2.4.0');
+assert.equal(inspect.Config.Labels['org.opencontainers.image.version'], '2.4.1');
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'sentinel-container-test-'));
 const workspace = path.join(root, 'workspace');
@@ -22,7 +22,7 @@ const reportsVolume = `sentinel-container-test-${process.pid}-${Date.now()}`;
 execFileSync('docker', ['volume', 'create', reportsVolume], { encoding: 'utf8' });
 const hardening = ['--rm', '--read-only', '--tmpfs', '/tmp:rw,noexec,nosuid,nodev', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--mount', `type=bind,src=${workspace},dst=/workspace,readonly`, '--mount', `type=volume,src=${reportsVolume},dst=/reports`];
 try {
-  assert.equal(execFileSync('docker', ['run', ...hardening, image, '--version'], { encoding: 'utf8' }), '2.4.0\n');
+  assert.equal(execFileSync('docker', ['run', ...hardening, image, '--version'], { encoding: 'utf8' }), '2.4.1\n');
   assert.match(execFileSync('docker', ['run', ...hardening, image, '--help'], { encoding: 'utf8' }), /sentinel contract-guard/u);
   for (const [command, required] of [
     ['contract-guard', ['--project-id', 'cgprj_test']],

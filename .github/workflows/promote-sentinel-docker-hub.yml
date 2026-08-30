@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact GHCR v2 SemVer tag to promote (for example, 2.4.0).
+        description: Exact GHCR v2 SemVer tag to promote (for example, 2.4.1).
         required: true
         type: string
       publish_latest:
@@ -88,7 +88,7 @@ jobs:
               [[ "$existing" == "$digest" ]] || { echo "::error::Docker Hub exact version already names different immutable content"; exit 1; }
               ;;
             absent)
-              docker buildx imagetools create --tag "$TARGET_IMAGE:$RELEASE_TAG" "$source_image@$digest"
+              docker buildx imagetools create --prefer-index=false --tag "$TARGET_IMAGE:$RELEASE_TAG" "$source_image@$digest"
               ;;
             *)
               echo "::error::Unable to prove Docker Hub exact-version state; refusing promotion"
@@ -98,7 +98,7 @@ jobs:
           actual="$(docker buildx imagetools inspect "$TARGET_IMAGE:$RELEASE_TAG" --format '{{json .Manifest.Digest}}' | tr -d '"')"
           [[ "$actual" == "$digest" ]] || { echo "::error::Docker Hub digest does not match GHCR"; exit 1; }
           if [[ "$PUBLISH_LATEST" == "true" ]]; then
-            docker buildx imagetools create --tag "$TARGET_IMAGE:latest" "$source_image@$digest"
+            docker buildx imagetools create --prefer-index=false --tag "$TARGET_IMAGE:latest" "$source_image@$digest"
           fi
           if [[ "$PUBLISH_LATEST" == "true" ]]; then
             latest="$(docker buildx imagetools inspect "$TARGET_IMAGE:latest" --format '{{json .Manifest.Digest}}' | tr -d '"')"

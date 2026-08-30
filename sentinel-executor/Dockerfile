@@ -14,7 +14,7 @@ RUN npm run build \
 
 FROM cgr.dev/chainguard/glibc-dynamic:latest@sha256:d0046044cd28948d3380eb0d98709dc7e63f98161fe7105135e1025650bad17a
 
-ARG IMAGE_VERSION=2.4.0
+ARG IMAGE_VERSION=2.4.1
 ARG IMAGE_REVISION=unknown
 ARG IMAGE_CREATED=unknown
 LABEL org.opencontainers.image.title="Alconite Sentinel Executor" \
