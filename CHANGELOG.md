@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-08-30
+
+### Added
+
+- Added the Linux amd64 Alconite Sentinel executor image with one token-safe CLI for Contract Guard, Impact, and Runtime Verify on local Docker and non-GitHub CI runners.
+- Added read-only CI image builds, hardened smoke tests, SPDX SBOM generation, and fail-closed High/Critical vulnerability scanning.
+- Added release-only GHCR publication with provenance and SBOM attestations, plus protected manual same-digest promotion to a later-configured Docker Hub repository.
+
+### Security
+
+- The image copies only Node 24.20.0 from the immutable builder into a pinned shell-free Chainguard glibc runtime, runs as nonroot, and supports a read-only root, capability removal, no-new-privileges, read-only `/workspace`, writable `/reports`, and a noexec tmpfs at `/tmp`.
+- Portable diagnostics redact the environment token even for parser failures, durable reports use private staging plus exclusive descriptor-bound persistence, and immutable registry versions fail closed on existing or ambiguous state.
+- Portable execution accepts the project token only through `ALCONITE_PROJECT_TOKEN`, suppresses GitHub command output, and moves bounded Action outputs through a creation-only private descriptor rather than child stdout.
+
+### Compatibility
+
+- Existing GitHub Actions inputs, outputs, defaults, summaries, and gate behavior remain unchanged; the container invokes the same generated Node 24 distributions.
+
+### Documentation
+
+- Documented local and non-GitHub CI execution, report mounts, hardening flags, token handling, GHCR tags, and the deferred Docker Hub environment, variable, and secret configuration.
+
 ## [2.3.0] - 2026-08-17
 
 ### Added

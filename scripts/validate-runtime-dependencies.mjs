@@ -41,4 +41,9 @@ if (impactBundle && impactBundle.size > 2 * 1024 * 1024) {
   throw new Error(`Impact bundle is unexpectedly large: ${impactBundle.size} bytes`);
 }
 
-console.log(`Reviewed ${reviewedPackages.size} bundled runtime dependency licenses; component bundle sizes are within policy.`);
+const sentinelBundle = await stat('sentinel-executor/dist/index.js').catch(() => undefined);
+if (sentinelBundle && sentinelBundle.size > 512 * 1024) {
+  throw new Error(`Sentinel executor bundle is unexpectedly large: ${sentinelBundle.size} bytes`);
+}
+
+console.log(`Reviewed ${reviewedPackages.size} bundled runtime dependency licenses; component and Sentinel bundle sizes are within policy.`);

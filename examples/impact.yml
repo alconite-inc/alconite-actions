@@ -16,7 +16,7 @@ jobs:
           persist-credentials: false
       - name: Contract Guard
         id: contract_guard
-        uses: alconite-inc/alconite-actions@v2.3.0
+        uses: alconite-inc/alconite-actions@v2.4.0
         with:
           project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
           project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}
@@ -24,7 +24,7 @@ jobs:
       - name: Alconite Impact
         id: impact
         if: steps.contract_guard.outcome == 'success'
-        uses: alconite-inc/alconite-actions/impact@v2.3.0
+        uses: alconite-inc/alconite-actions/impact@v2.4.0
         with:
           project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
           project-token: ${{ secrets.ALCONITE_CONTRACT_GUARD_TOKEN }}

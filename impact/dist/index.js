@@ -501,6 +501,15 @@ function command(name, message, properties = {}) {
   process.stdout.write(`::${name}${serialized ? ` ${serialized}` : ""}::${commandEscape(message)}
 `);
 }
+function portableMode() {
+  return process.env.ALCONITE_EXECUTION_MODE === "portable";
+}
+function portableDiagnostic(level, message, title) {
+  const normalized = message.replaceAll("\r", " ").replaceAll("\n", " ").slice(0, 8192);
+  const prefix = title ? `${level} [${title.slice(0, 160)}]` : level;
+  process.stderr.write(`${prefix}: ${normalized}
+`);
+}
 function getInput(name, options = {}) {
   const key = `INPUT_${name.replaceAll(" ", "_").toUpperCase()}`;
   const value = (process.env[key] || "").trim();
@@ -508,9 +517,17 @@ function getInput(name, options = {}) {
   return value;
 }
 function setSecret(value) {
+  if (portableMode()) return;
   if (value) command("add-mask", value);
 }
 function setOutput(name, value) {
+  if (portableMode()) {
+    const descriptor = Number(process.env.ALCONITE_PORTABLE_OUTPUT_FD);
+    if (!Number.isInteger(descriptor) || descriptor < 3) throw new Error("Portable output channel is unavailable.");
+    (0, import_node_fs.appendFileSync)(descriptor, `${JSON.stringify({ name, value })}
+`, { encoding: "utf8" });
+    return;
+  }
   const outputFile = process.env.GITHUB_OUTPUT;
   if (!outputFile) {
     command("set-output", value, { name });
@@ -523,10 +540,18 @@ ${delimiter}
 `, { encoding: "utf8" });
 }
 function info(message) {
+  if (portableMode()) {
+    portableDiagnostic("info", message);
+    return;
+  }
   process.stdout.write(`${message}
 `);
 }
 function error(message, title) {
+  if (portableMode()) {
+    portableDiagnostic("error", message, title);
+    return;
+  }
   command("error", message, title ? { title } : {});
 }
 function setFailed(message) {
@@ -544,6 +569,7 @@ function markdownTable(headers, rows) {
   ].join("\n");
 }
 function writeJobSummary(markdown) {
+  if (portableMode()) return;
   const summaryFile = process.env.GITHUB_STEP_SUMMARY;
   if (summaryFile) (0, import_node_fs.appendFileSync)(summaryFile, markdown, { encoding: "utf8" });
 }
@@ -1669,7 +1695,7 @@ function validateImpactReportForRequest(report, request) {
 }
 
 // src/release.ts
-var ACTION_RELEASE_VERSION = "2.3.0";
+var ACTION_RELEASE_VERSION = "2.4.0";
 var CONTRACT_GUARD_USER_AGENT = `alconite-contract-guard-action/${ACTION_RELEASE_VERSION}`;
 var IMPACT_USER_AGENT = `alconite-impact-action/${ACTION_RELEASE_VERSION}`;
 var RUNTIME_VERIFY_USER_AGENT = `alconite-runtime-verify-action/${ACTION_RELEASE_VERSION}`;
