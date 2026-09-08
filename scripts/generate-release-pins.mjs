@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { validateComponentPin } from './component-pin.mjs';
 
 const repository = ['alconite-inc', 'alconite-actions'].join('/');
 const entryPoints = [
@@ -31,19 +32,20 @@ export async function generateReleasePins({ cwd = process.cwd(), tag, outputDire
   const taggedPackage = JSON.parse(git('show', `${commit}:package.json`));
   assert.equal(taggedPackage.version, manifest.version, 'tagged package must match the working version');
   assert.equal(git('status', '--porcelain', '--untracked-files=no'), '', 'commit tracked changes before generating release pins');
+  const componentPin = await validateComponentPin(cwd);
   const references = entryPoints.map(([name, suffix, kind]) => ({
     name, kind, path: `${repository}${suffix}`,
     versionRef: `${repository}${suffix}@${tag}`,
     shaRef: `${repository}${suffix}@${commit}`,
   }));
-  const pins = { schemaVersion: 1, version: manifest.version, tag, commit, references };
+  const pins = { schemaVersion: 1, version: manifest.version, tag, commit, componentCommit: componentPin.commit, references };
   const markdown = [
     `# Alconite Actions ${tag} references`, '',
     `Tag: [\`${tag}\`](https://github.com/${repository}/releases/tag/${tag})`, '',
     `Commit: [\`${commit}\`](https://github.com/${repository}/commit/${commit})`, '',
     'Generated from the checked-out tag. All entries below select the same release commit.', '',
     'Action entries belong under `jobs.<job>.steps`; reusable workflows belong under `jobs.<job>.uses`.', '',
-    'A SHA-pinned reusable workflow still calls version-tagged Alconite helpers internally. Organizations enforcing SHA pins at every call should compose the individual helpers using these SHA references.', '',
+    `Internal reusable-workflow calls are pinned to component commit \`${componentPin.commit}\`. Its Action content and build inputs are verified identical to this release.`, '',
     ...references.flatMap(({ name, kind, versionRef, shaRef }) => [
       `## ${name}`, '', `Entry point: ${kind}.`, '',
       '```yaml', `uses: ${versionRef}`, '```', '',

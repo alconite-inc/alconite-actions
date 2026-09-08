@@ -16,6 +16,7 @@ All notable changes to this project are documented in this file.
 - Withhold private Java and Node dependency tokens on every pull request event, including same-repository pull requests.
 - Update the locked transitive `fast-uri` dependency to a patched version and regenerate bundles to clear the required High-severity dependency audit.
 - Reject Runtime Verify operation paths that escape the configured target origin before any request or target credential can be sent.
+- Keep response-owned JSON keys and unexpected media-type values out of Runtime Verify findings; redact configured credentials in evidence text before computing result identities.
 - Update Swagger Parser, its reference resolver, and `ignore` to their security fixes; regenerate the Impact bundle to remove the flagged broad character ranges.
 
 ### Security maintenance

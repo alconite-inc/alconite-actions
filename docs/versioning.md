@@ -40,7 +40,9 @@ Compare the resolved commit with the published mapping before copying a SHA exam
 
 ## SHA policies and reusable workflows
 
-Pinning a reusable workflow fixes its workflow file, but Stack CI and the Runtime Verify reusable workflow call Alconite helpers at the exact version tag internally. Organizations requiring a full SHA at **every** call should compose the individual helpers in their own workflow using the release mapping. External Actions inside the helpers already use full SHA pins. An organization enforcing an action allowlist must also permit these referenced upstream Actions; SHA pinning does not bypass that policy.
+Stack CI and the Runtime Verify reusable workflow now call Alconite helpers by full SHA internally, supporting organization policies requiring a SHA at **every** call. External Actions inside the helpers also use full SHA pins. An organization enforcing an action allowlist must permit these referenced upstream Actions; SHA pinning does not bypass that policy.
+
+The reviewed component commit is `02478f85802a221e754abc231c3c947ae27b4dc4` for v2.5.0, recorded in [release-components.json](../release-components.json). The final release commit contains the workflow pins and may have a different SHA. Validation requires the component commit to be an ancestor and verifies that all Action files, sources, dependencies, and production build inputs match it exactly. Thus a versioned or SHA-pinned reusable workflow executes the same reviewed components as the direct Actions at the final release commit. Release assets record both `commit` (the final tag target) and `componentCommit` (the internal helper pin).
 
 ## Upgrading from v2.4
 
@@ -52,7 +54,11 @@ Pinning a reusable workflow fixes its workflow file, but Stack CI and the Runtim
 
 ## Maintainer release sequence
 
-Update `package.json`, the lockfile, component identities, current examples, tests, container defaults, and the dated changelog together. Run `npm ci`, `npm audit --audit-level=high`, `npm run verify`, and `actionlint`, and commit all generated distributions. Container changes also require the image checks described in [Contributing](../CONTRIBUTING.md).
+Update `package.json`, the lockfile, component identities, current examples, tests, container defaults, and the dated changelog together. Install locked dependencies, audit them, rebuild distributions, and run typechecking and tests. Container changes also require the image checks described in [Contributing](../CONTRIBUTING.md).
+
+Commit the reviewed component changes first. Record that full SHA and version in `release-components.json`, replace the eight internal component references in the two reusable workflows with that SHA, and update the documented component commit above. Then run `npm run verify` and `actionlint` and commit the pin/documentation follow-up. The component check rejects changed or new Action files and build inputs after the pin, including stale distributions. It needs full Git history; the validation and release workflows fetch it. A shallow developer checkout must fetch the missing history before validation.
+
+Merge these commits with a merge commit that preserves their ancestry. Do not squash or rebase away the component commit: validation will reject a pin whose commit is no longer an ancestor. If further component changes are required before release, create a new component commit and update the internal pins again before final validation.
 
 After review and merge, tag the exact reviewed release commit on `main`. Publishing that new tag starts the release workflow. It checks the tag/package match and main ancestry, verifies the distributions, and resolves the tag to generate the SHA examples. The release pins generator rejects a missing tag, a mismatched version, a different checkout, or tracked uncommitted changes. The release then publishes its image and attaches the mapping to its GitHub release notes.
 

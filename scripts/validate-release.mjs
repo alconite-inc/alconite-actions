@@ -4,12 +4,14 @@ import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { parse } from 'yaml';
 import { validateChangelog, validateSelfReferences } from './release-policy.mjs';
+import { validateComponentPin } from './component-pin.mjs';
 
 const execFileAsync = promisify(execFile);
 const packageManifest = JSON.parse(await readFile('package.json', 'utf8'));
 const packageLock = JSON.parse(await readFile('package-lock.json', 'utf8'));
 const releaseVersion = packageManifest.version;
 const releaseTag = `v${releaseVersion}`;
+const componentPin = await validateComponentPin();
 const uploadArtifact = 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1';
 const attest = 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4';
 const uploadArtifactMarker = ['actions/upload', 'artifact@'].join('-');
@@ -57,7 +59,7 @@ for (const filename of trackedFiles) {
     }
     assert.equal(pendingWord.test(source), false, `${filename} contains a pending-release marker`);
   }
-  validateSelfReferences(filename, source, releaseTag);
+  validateSelfReferences(filename, source, releaseTag, componentPin.commit);
 
   for (const line of source.split(/\r?\n/u)) {
     if (line.includes(uploadArtifactMarker)) {

@@ -156,6 +156,13 @@ test('release policy accepts only the current self-reference outside labeled his
   }
 });
 
+test('release policy permits only the explicitly reviewed component SHA', () => {
+  const reviewed = 'b'.repeat(40);
+  assert.doesNotThrow(() => validateSelfReferences('README.md', `${selfReferencePrefix}/impact@${reviewed}`, currentTag, reviewed));
+  assert.throws(() => validateSelfReferences('README.md', `${selfReferencePrefix}/impact@${'c'.repeat(40)}`, currentTag, reviewed), /non-current/u);
+  assert.throws(() => validateSelfReferences('README.md', `${selfReferencePrefix}/impact@main`, currentTag, 'main'), /non-current/u);
+});
+
 test('release policy requires one dated current heading directly after the empty pending section', () => {
   const pendingHeading = ['Un', 'released'].join('');
   const releaseHeading = `## [${currentVersion}] - 2026-08-11`;

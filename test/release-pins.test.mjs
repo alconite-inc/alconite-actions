@@ -16,8 +16,12 @@ async function fixture(t) {
   await writeFile(path.join(cwd, 'package.json'), '{"version":"2.5.0"}\n');
   git('add', 'package.json');
   git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Release fixture');
+  const componentCommit = git('rev-parse', 'HEAD');
+  await writeFile(path.join(cwd, 'release-components.json'), JSON.stringify({ version: '2.5.0', commit: componentCommit }));
+  git('add', 'release-components.json');
+  git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Pin components');
   const outputDirectory = path.join(cwd, 'output');
-  return { cwd, git, outputDirectory, tag: 'v2.5.0' };
+  return { cwd, git, outputDirectory, componentCommit, tag: 'v2.5.0' };
 }
 
 test('release pins use the peeled annotated tag commit for every entry point', async (t) => {
@@ -25,6 +29,7 @@ test('release pins use the peeled annotated tag commit for every entry point', a
   f.git('-c', 'tag.gpgsign=false', 'tag', '-a', f.tag, '-m', 'Release fixture');
   const pins = await generateReleasePins(f);
   assert.equal(pins.commit, f.git('rev-parse', 'HEAD'));
+  assert.equal(pins.componentCommit, f.componentCommit);
   assert.notEqual(pins.commit, f.git('rev-parse', `refs/tags/${f.tag}`));
   assert.equal(pins.references.length, 11);
   for (const ref of pins.references) {
