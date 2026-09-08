@@ -116,6 +116,13 @@ for (const [name, subjectPath] of expectedSubjects) {
 }
 const publish = steps.find((step) => step.name === 'Create GitHub release');
 assert.ok(publish?.run?.includes('--verify-tag'), 'release creation must verify the immutable tag');
+assert.ok(publish?.run?.includes('--notes-file build/release/release-notes.md'), 'release notes must include generated SHA references');
+for (const asset of ['release-pins.md', 'release-pins.json']) {
+  assert.ok(publish?.run?.includes(`build/release/${asset}`), `release must attach ${asset}`);
+}
+const pinsStep = steps.find((step) => step.name === 'Generate version and SHA usage references');
+assert.equal(pinsStep?.env?.RELEASE_TAG, '${{ github.ref_name }}');
+assert.equal(pinsStep?.run, 'node scripts/generate-release-pins.mjs');
 
 const readme = await readFile('README.md', 'utf8');
 assert.match(readme, /Linux GitHub runner/u, 'Impact documentation must state its Linux runner requirement');

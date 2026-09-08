@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-09-08
+
+### Changed
+
+- Stack CI publishes Docker images without requiring GitHub artifact attestations or the `id-token: write` and `attestations: write` permissions. BuildKit SBOM and provenance metadata remain enabled for stack publication; GitHub attestation can be added in a caller-owned Docker workflow.
+- Synchronize all components, examples, workflow references, and generated distributions under v2.5.0.
+
+### Fixed
+
+- Withhold private Java and Node dependency tokens on every pull request event, including same-repository pull requests.
+- Update the locked transitive `fast-uri` dependency to a patched version and regenerate bundles to clear the required High-severity dependency audit.
+
+### Documentation
+
+- Add complete helper references, onboarding, permissions and secrets guidance, enterprise compatibility notes, troubleshooting, and migration examples.
+- Generate version-tag and full commit-SHA usage references from the verified release tag and attach them to each GitHub release.
+
+### Compatibility
+
+- Existing action inputs and outputs are unchanged. Stack consumers requiring GitHub artifact attestation should compose the Docker helper with the documented optional attestation step. Maintainer publication of Alconite distributions and Sentinel continues to attest its own release artifacts.
+
 ## [2.4.1] - 2026-08-30
 
 ### Fixed

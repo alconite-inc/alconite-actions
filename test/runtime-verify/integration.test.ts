@@ -129,7 +129,7 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
         workflowRunId: '123', workflowRunAttempt: 1,
         releaseIdentifier: initiation?.deployment?.releaseIdentifier ?? null
       },
-      runner: { name: 'alconite-runtime-verify-action', version: '2.4.1', operatingSystem: 'Linux', architecture: 'X64' },
+      runner: { name: 'alconite-runtime-verify-action', version: '2.5.0', operatingSystem: 'Linux', architecture: 'X64' },
       summary: {
         ...body.execution,
         informationalFindings: submitted.filter((item: any) => item.classification === 'informational').length

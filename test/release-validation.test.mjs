@@ -10,7 +10,7 @@ import {
   validateManifestPreservingCopies,
 } from '../scripts/validate-sentinel-container.mjs';
 
-const currentVersion = '2.4.1';
+const currentVersion = '2.5.0';
 const currentTag = `v${currentVersion}`;
 const mixedCasePrefix = ['AlCoNiTe-InC', 'AlCoNiTe-AcTiOnS'].join('/');
 
@@ -56,9 +56,9 @@ test('registry manifest inspection distinguishes confirmed absence from ambiguou
   for (const diagnostic of [
     'manifest unknown: manifest unknown',
     'unexpected status from HEAD request: 404 Not Found',
-    'ERROR: unexpected status from HEAD request to https://ghcr.io/v2/alconite-inc/sentinel-executor/manifests/v2.4.1: 404 Not Found',
-    'ghcr.io/alconite-inc/sentinel-executor:v2.4.1: not found',
-    'ERROR: docker.io/alconite/sentinel-executor:2.4.1: not found',
+    'ERROR: unexpected status from HEAD request to https://ghcr.io/v2/alconite-inc/sentinel-executor/manifests/v2.5.0: 404 Not Found',
+    'ghcr.io/alconite-inc/sentinel-executor:v2.5.0: not found',
+    'ERROR: docker.io/alconite/sentinel-executor:2.5.0: not found',
     'response status code: 404 Not Found',
   ]) {
     assert.equal(classifyRegistryInspection(1, diagnostic), 'absent', diagnostic);
@@ -72,7 +72,7 @@ test('registry manifest inspection distinguishes confirmed absence from ambiguou
     'unauthorized: authentication required; unexpected status from HEAD request: 404 Not Found',
     'failed to authorize: token endpoint returned 404 Not Found',
     'unexpected status from HEAD request: 503 Service Unavailable; 404 Not Found',
-    'warning: registry response was ambiguous\nghcr.io/alconite-inc/sentinel-executor:v2.4.1: not found',
+    'warning: registry response was ambiguous\nghcr.io/alconite-inc/sentinel-executor:v2.5.0: not found',
     'something: not found',
     '',
   ]) {
@@ -144,7 +144,7 @@ test('release policy accepts only the current self-reference outside labeled his
     'a'.repeat(40),
     'feature/old-release',
     currentTag,
-    `v${['2', '4', '2'].join('.')}`,
+    `v${['2', '5', '1'].join('.')}`,
     `v${['1', '9', '9'].join('.')}`,
   ];
   for (const ref of invalidHistoricalRefs) {

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact GHCR v2 SemVer tag to promote (for example, 2.4.1).
+        description: Exact GHCR v2 SemVer tag to promote (for example, 2.5.0).
         required: true
         type: string
       publish_latest:
