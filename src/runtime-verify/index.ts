@@ -2,12 +2,14 @@ import { getInput, info, setFailed, setOutput, setSecret, writeJobSummary } from
 import { shouldFailGate } from '../contract-guard';
 import { loadConfiguration } from './configuration';
 import { safeError, type RuntimeErrorCode, RuntimeVerifyError } from './errors';
+import { finding } from './findings';
 import { runtimeSummary } from './github-summary';
 import { deriveIdempotencyKey, readInputs } from './inputs';
 import { loadOpenApi } from './openapi';
 import { createOperationPlan } from './operation-plan';
 import { createInitiationRequest, RuntimeVerifyPlatformClient } from './platform-client';
 import { createRunnerResult, summarize, writeCanonicalReport, type RuntimeVerifyReport } from './report';
+import { redactFindingDetails } from './redaction';
 import { executePlan } from './target-client';
 
 async function run(): Promise<void> {
@@ -53,7 +55,8 @@ async function run(): Promise<void> {
       const totalSignal = AbortSignal.timeout(inputs.timeoutSeconds * 1_000);
       ({ observations, findings } = await executePlan(contract, plan, inputs.baseUrl, configuration.configuration.defaults, totalSignal));
     }
-    findings = boundFindings(findings);
+    findings = boundFindings(findings).map(({ fingerprint: _fingerprint, ...details }) =>
+      finding(redactFindingDetails(details, [inputs.projectToken, ...configuration.secrets])));
     const completedAt = new Date().toISOString();
     const result = createRunnerResult({
       completedAt,

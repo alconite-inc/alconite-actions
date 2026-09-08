@@ -43,6 +43,15 @@ test('plans exactly the configured safe operation and encodes primitive paramete
   assert.equal(plan[0]?.pathTemplate, '/customers/{customerId}');
 });
 
+test('rejects OpenAPI paths that URL parsing could reinterpret as another authority', () => {
+  for (const template of ['//attacker.example/{customerId}', '/\\attacker.example/{customerId}', '/\t/attacker.example/{customerId}', '/\n/attacker.example/{customerId}']) {
+    const contract = approved();
+    const originalPaths = contract.document.paths as Record<string, unknown>;
+    contract.document.paths = { [template]: originalPaths['/customers/{customerId}'] };
+    assert.throws(() => createOperationPlan(contract, configuration(), new Map()), { code: 'operation_plan_invalid' });
+  }
+});
+
 test('rejects a configured operation missing from the contract', () => {
   const config = parseConfiguration({ version: 1, operations: [{ operationId: 'missing' }] });
   assert.throws(() => createOperationPlan(approved(), config, new Map()), /missing from/);

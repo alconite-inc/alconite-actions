@@ -6,10 +6,15 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { platformContractContentHash } from '../../src/runtime-verify/openapi';
+import { finding } from '../../src/runtime-verify/findings';
+import { createRunnerResult } from '../../src/runtime-verify/report';
 
 interface Scenario {
   targetStatus?: number;
   targetBody?: string;
+  targetContentType?: string;
+  targetCredential?: string;
+  contractText?: string;
   expectedHash?: string;
   replay?: boolean;
   gateResult?: 'passed' | 'passed_with_warnings' | 'failed';
@@ -58,7 +63,7 @@ async function close(server: Server): Promise<void> {
 
 async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'runtime-action-'));
-  const contractText = `openapi: 3.1.0\ninfo:\n  title: Integration\n  version: 1.0.0\npaths:\n  /health:\n    get:\n      operationId: getHealth\n      responses:\n        '200':\n          description: Healthy\n          content:\n            application/json:\n              schema:\n                type: object\n                required: [status]\n                properties:\n                  status:\n                    type: string\n`;
+  const contractText = scenario.contractText ?? `openapi: 3.1.0\ninfo:\n  title: Integration\n  version: 1.0.0\npaths:\n  /health:\n    get:\n      operationId: getHealth\n      responses:\n        '200':\n          description: Healthy\n          content:\n            application/json:\n              schema:\n                type: object\n                required: [status]\n                properties:\n                  status:\n                    type: string\n`;
   const configurationText = `version: 1\noperations:\n  - operationId: getHealth\n    headers:\n      Authorization:\n        fromEnvironment: STAGING_API_AUTHORIZATION\n    expect:\n      statuses: [200]\n`;
   await writeFile(path.join(directory, 'openapi.yaml'), contractText);
   await writeFile(path.join(directory, 'runtime.yaml'), configurationText);
@@ -69,10 +74,11 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
     : path.join(directory, 'report.json');
   await writeFile(outputPath, ''); await writeFile(summaryPath, '');
   let targetCalls = 0;
+  const targetCredential = scenario.targetCredential ?? targetSecret;
   const targetServer = createServer((request, reply) => {
     targetCalls += 1;
-    assert.equal(request.headers.authorization, targetSecret);
-    reply.writeHead(scenario.targetStatus ?? 200, { 'content-type': 'application/json' });
+    assert.equal(request.headers.authorization, targetCredential);
+    reply.writeHead(scenario.targetStatus ?? 200, { 'content-type': scenario.targetContentType ?? 'application/json' });
     reply.end(scenario.targetBody ?? '{"status":"healthy"}');
   });
   const targetUrl = await listen(targetServer);
@@ -192,7 +198,7 @@ async function runScenario(scenario: Scenario = {}): Promise<ScenarioResult> {
       'INPUT_ENVIRONMENT-ID': environmentId,
       'INPUT_BASE-URL': targetUrl.toString(), 'INPUT_CONTRACT-PATH': 'openapi.yaml', 'INPUT_CONFIGURATION-PATH': 'runtime.yaml',
       'INPUT_API-URL': platformUrl.toString(), 'INPUT_FAIL-ON': scenario.failOn ?? 'failed', 'INPUT_RETRY-ATTEMPTS': '1',
-      'INPUT_DEPLOYMENT-ID': scenario.deploymentId ?? 'deployment-abc', STAGING_API_AUTHORIZATION: targetSecret
+      'INPUT_DEPLOYMENT-ID': scenario.deploymentId ?? 'deployment-abc', STAGING_API_AUTHORIZATION: targetCredential
     };
     if (scenario.explicitCheckId) childEnvironment['INPUT_CHECK-ID'] = checkId;
     if (!scenario.omitReportPath) childEnvironment['INPUT_REPORT-PATH'] = reportPath;
@@ -238,6 +244,69 @@ test('end-to-end passing action writes safe outputs, summary, and canonical repo
   assert.equal(result.stderr.includes(projectToken) || result.stderr.includes(targetSecret), false);
   assert.equal(result.output.includes(projectToken) || result.output.includes(targetSecret), false);
   assert.equal(result.summary.includes(projectToken) || result.summary.includes(targetSecret), false);
+});
+
+function contractWithResponseSchema(schema: unknown): string {
+  return JSON.stringify({ openapi: '3.1.0', info: { title: 'Privacy fixture', version: '1.0.0' }, paths: {
+    '/health': { get: { operationId: 'getHealth', responses: { '200': { description: 'Healthy',
+      content: { 'application/json': { schema } }
+    } } } }
+  } });
+}
+
+test('submitted findings exclude response-owned identifiers and secret map keys', async () => {
+  const customerIdentifier = 'customer-private@example.com';
+  const result = await runScenario({
+    contractText: contractWithResponseSchema({ type: 'object', additionalProperties: { type: 'integer' } }),
+    targetBody: JSON.stringify({ [customerIdentifier]: 'private-value', [targetSecret]: 'private-value', [projectToken]: 'private-value' })
+  });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.resultCalls, 1);
+  assert.equal(result.uploadedResult.findings.length, 1);
+  assert.match(result.uploadedResult.findings[0].location, /additionalProperties\/type$/);
+  assert.equal(result.uploadedResult.observations[0].operationId, 'getHealth');
+  assert.equal(result.report.gateResult, 'failed');
+  for (const value of [customerIdentifier, targetSecret, projectToken, 'private-value']) {
+    assert.equal(JSON.stringify(result.uploadedResult).includes(value), false);
+    assert.equal(JSON.stringify(result.report).includes(value), false);
+    assert.equal(result.summary.includes(value), false);
+  }
+});
+
+test('submitted evidence excludes credentials reflected in an undocumented media type', async () => {
+  const targetCredential = 'audit-target-header-secret';
+  for (const reflected of [targetCredential, projectToken]) {
+    const result = await runScenario({ targetCredential, targetContentType: `application/${reflected}` });
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.resultCalls, 1);
+    assert.equal(result.uploadedResult.observations[0].contentType, undefined);
+    assert.equal(result.uploadedResult.findings[0].actual, 'undocumented media type');
+    assert.equal(JSON.stringify(result.uploadedResult).includes(reflected), false);
+    assert.equal(JSON.stringify(result.report).includes(reflected), false);
+    assert.equal(result.summary.includes(reflected), false);
+  }
+});
+
+test('known-secret evidence redaction precedes finding fingerprints and the submitted result digest', async () => {
+  const result = await runScenario({
+    contractText: contractWithResponseSchema({ type: 'object', required: [targetSecret, projectToken] }),
+    targetBody: '{}'
+  });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.resultCalls, 1);
+  for (const value of [targetSecret, projectToken]) {
+    assert.equal(JSON.stringify(result.uploadedResult).includes(value), false);
+    assert.equal(JSON.stringify(result.report).includes(value), false);
+    assert.equal(result.summary.includes(value), false);
+  }
+  assert.equal(result.uploadedResult.findings.length, 2);
+  for (const { fingerprint, ...details } of result.uploadedResult.findings) {
+    assert.equal(fingerprint, finding(details).fingerprint);
+    assert.equal(details.operationId, 'getHealth');
+    assert.equal(details.classification, 'failure');
+  }
+  const { schema: _schema, resultDigest, ...input } = result.uploadedResult;
+  assert.equal(resultDigest, createRunnerResult(input).resultDigest);
 });
 
 test('explicit check-id remains compatible when an older initiation response omits the resolved field', async () => {

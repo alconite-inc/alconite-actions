@@ -27,6 +27,8 @@ Do not include live project tokens, registry credentials, customer contracts, or
 - Supply Runtime Verify target credentials only through explicitly named runner environment variables; never place them in Action inputs or checked-in configuration values.
 - Run Runtime Verify only in trusted post-deployment jobs. The target API is called from the customer runner, not from Alconite.
 - Keep redirects disabled unless the target requires same-origin redirects, and do not expose deployment secrets to untrusted fork workflows.
+- Bind the initial Runtime Verify request to its configured origin before forwarding any target credential; an OpenAPI path must not select another authority.
+- Keep response-owned keys and arbitrary header text out of validation evidence; findings identify approved schema constraints and redact configured secrets in evidence text.
 - Run the Sentinel image as its built-in nonroot user with a read-only root, `--cap-drop ALL`, `--security-opt no-new-privileges`, a read-only `/workspace` bind, writable `/reports`, and `/tmp` supplied as `rw,noexec,nosuid,nodev` tmpfs.
 - Supply a fresh Contract Guard or Runtime Verify report destination for each invocation. Portable execution stages these reports privately and creates the final `/reports` file with exclusive no-follow descriptor checks; existing files, links, and ambiguous path replacement fail closed.
 - Supply the container project token only as `ALCONITE_PROJECT_TOKEN`. Treat stdout as a one-line machine result and stderr as bounded diagnostics; never place credentials in arguments, report paths, labels, build arguments, or image layers.
@@ -35,3 +37,5 @@ Do not include live project tokens, registry credentials, customer contracts, or
 Runtime Verify submits bounded status, media-type, timing, size, hash, and finding metadata. It must not submit the target origin, expanded URLs, target request/response header values, response bodies, environment values, local paths, GitHub tokens, or runner diagnostic dumps. Reports that violate this boundary are security issues and should be reported privately.
 
 Impact submits a bounded UTF-8 manifest from the checked-out workspace to the configured Alconite origin and receives an ephemeral deterministic report. It rejects links, path escapes, binaries, unsupported platforms, and resource-limit overflows before publishing a partial result. Source-content or project-token disclosure is a security issue and should be reported privately.
+
+See [Security maintenance](docs/security-maintenance.md) for the current alert remediation record, scanning coverage, and remaining upstream findings.

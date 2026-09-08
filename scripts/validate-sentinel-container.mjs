@@ -46,7 +46,7 @@ async function validateRepositoryContract() {
   const { parse } = await import('yaml');
   const dockerfile = await readFile('sentinel-executor/Dockerfile', 'utf8');
   assert.match(dockerfile, /^FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS builder$/mu);
-  assert.match(dockerfile, /^FROM cgr\.dev\/chainguard\/glibc-dynamic:latest@sha256:d0046044cd28948d3380eb0d98709dc7e63f98161fe7105135e1025650bad17a$/mu);
+  assert.match(dockerfile, /^FROM cgr\.dev\/chainguard\/glibc-dynamic:latest@sha256:d49aa7837ef1ef8fae33917f94369294c6d49940d2f0b225beee65a3bb6747ed$/mu);
   assert.match(dockerfile, /RUN npm ci/u);
   assert.match(dockerfile, /^COPY --from=builder \/usr\/local\/bin\/node \/nodejs\/bin\/node$/mu);
   assert.match(dockerfile, /USER 65532:65532/u);

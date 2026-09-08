@@ -164,6 +164,9 @@ function expandPath(template: string, parameters: Record<string, string | number
     return encodeURIComponent(String(value));
   });
   if (expanded.includes('{') || expanded.includes('}')) throw planError('The OpenAPI path template could not be safely expanded.');
+  if (expanded.startsWith('//') || /[\\\u0000-\u001f\u007f]/u.test(expanded)) {
+    throw planError('The OpenAPI path template must not contain an authority, backslash, or control character.');
+  }
   return expanded.startsWith('/') ? expanded : `/${expanded}`;
 }
 function array(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }

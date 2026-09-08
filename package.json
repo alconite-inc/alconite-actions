@@ -22,18 +22,18 @@
     "verify": "npm run typecheck && npm test && npm run validate:actions && npm run validate:dependencies && npm run validate:sentinel-container && npm run validate:release && npm run build"
   },
   "dependencies": {
-    "@apidevtools/swagger-parser": "12.1.0",
+    "@apidevtools/swagger-parser": "13.0.0",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
-    "ignore": "7.0.6",
+    "ignore": "7.0.8",
     "yaml": "2.9.0"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
-    "esbuild": "0.28.1",
+    "@types/node": "^26.5.0",
+    "esbuild": "0.28.2",
     "typescript": "^7.0.2"
   },
   "allowScripts": {
-    "esbuild@0.28.1": true
+    "esbuild@0.28.2": true
   }
 }

@@ -42,27 +42,30 @@ export function validateResponse(input: ResponseValidationInput): ResponseValida
   if (!isObject(response)) return { findings };
   validateRequiredHeaders(contract.document, plan, response, headers, durationMilliseconds, findings);
   const observedContentType = normalizeMediaType(headers.get('content-type') ?? '');
-  if (plan.method === 'HEAD' || body.length === 0) return { findings, ...(observedContentType ? { contentType: observedContentType } : {}) };
   const content = isObject(response.content) ? response.content : {};
   const selected = observedContentType
     ? Object.entries(content).find(([documented]) => mediaTypesMatch(documented, observedContentType))
     : undefined;
+  // Only report media types from the approved schema, never arbitrary target header values.
+  const reportedContentType = selected ? normalizeMediaType(selected[0]) : undefined;
+  const mediaTypeResult = reportedContentType ? { contentType: reportedContentType } : {};
+  if (plan.method === 'HEAD' || body.length === 0) return { findings, ...mediaTypeResult };
   if (!selected) {
     findings.push(responseFinding(plan, durationMilliseconds, 'runtime.response.content-type-mismatch',
       'The target returned an undocumented content type.', 'The response body media type does not match the approved response content map.',
       'Return a documented media type for this status.', '$response/headers/content-type',
-      Object.keys(content).slice(0, 20).join(', ') || 'no response body', observedContentType ?? 'missing'));
-    return { findings, ...(observedContentType ? { contentType: observedContentType } : {}) };
+      Object.keys(content).slice(0, 20).join(', ') || 'no response body', observedContentType ? 'undocumented media type' : 'missing or invalid media type'));
+    return { findings };
   }
   if (plan.expect.contentTypes && !plan.expect.contentTypes.some(expected => mediaTypesMatch(expected, observedContentType!))) {
     findings.push(responseFinding(plan, durationMilliseconds, 'runtime.response.content-type-mismatch',
       'The response content type did not meet the configured expectation.', 'The media type is documented but excluded by the narrower Runtime Verify configuration.',
-      'Return one of the configured expected content types.', '$response/headers/content-type', plan.expect.contentTypes.join(', '), observedContentType));
+      'Return one of the configured expected content types.', '$response/headers/content-type', plan.expect.contentTypes.join(', '), reportedContentType));
   }
   const media = selected[0];
   const mediaObject = resolveLocalReference(contract.document, selected[1]);
   if (!isJsonMediaType(media) || !isObject(mediaObject) || mediaObject.schema === undefined) {
-    return { findings, ...(observedContentType ? { contentType: observedContentType } : {}) };
+    return { findings, ...mediaTypeResult };
   }
   let parsed: unknown;
   try { parsed = JSON.parse(body.toString('utf8')); }
@@ -70,13 +73,17 @@ export function validateResponse(input: ResponseValidationInput): ResponseValida
     findings.push(responseFinding(plan, durationMilliseconds, 'runtime.response.invalid-json',
       'The target returned invalid JSON.', 'The documented JSON response could not be parsed within the runner.',
       'Return syntactically valid JSON without changing the documented media type.', '$response/body'));
-    return { findings, ...(observedContentType ? { contentType: observedContentType } : {}) };
+    return { findings, ...mediaTypeResult };
   }
   const validation = compileSchema(contract, mediaObject.schema);
   if (!validation(parsed)) {
-    for (const error of (validation.errors ?? []).slice(0, 50)) findings.push(schemaFinding(plan, durationMilliseconds, error));
+    const seen = new Set<string>();
+    for (const error of (validation.errors ?? []).slice(0, 50)) {
+      const item = schemaFinding(plan, durationMilliseconds, error);
+      if (!seen.has(item.fingerprint)) { findings.push(item); seen.add(item.fingerprint); }
+    }
   }
-  return { findings, ...(observedContentType ? { contentType: observedContentType } : {}) };
+  return { findings, ...mediaTypeResult };
 }
 
 function compileSchema(contract: ApprovedContract, schema: unknown): ValidateFunction {
@@ -135,8 +142,11 @@ function validateRequiredHeaders(
 function schemaFinding(plan: PlannedOperation, duration: number, error: ErrorObject): RuntimeFinding {
   const missing = error.keyword === 'required';
   const wrongType = error.keyword === 'type';
-  const missingProperty = missing && typeof error.params.missingProperty === 'string' ? `/${escapePointer(error.params.missingProperty)}` : '';
-  const location = `${error.instancePath || '/'}${missingProperty}`;
+  // instancePath can contain customer identifiers or credentials used as JSON map keys.
+  // schemaPath identifies the approved constraint and contains no response-owned keys.
+  const missingProperty = missing && typeof error.params.missingProperty === 'string'
+    ? `/${error.params.missingProperty.replaceAll('~', '~0').replaceAll('/', '~1')}` : '';
+  const location = `${error.schemaPath}${missingProperty}`;
   const ruleId = missing ? 'runtime.response.required-property-missing' : wrongType ? 'runtime.response.type-mismatch' : 'runtime.response.schema-invalid';
   const summary = missing ? 'A required response property was absent.' : wrongType ? 'A response value had the wrong type.' : 'The response did not match its documented schema.';
   const explanation = missing ? 'Required property was absent.' : wrongType ? `Expected ${String(error.params.type)}; received a different JSON type.` : `The response failed the ${error.keyword} schema constraint.`;
@@ -154,4 +164,3 @@ function responseFinding(
     ...(expected === undefined ? {} : { expected }), ...(actual === undefined ? {} : { actual }), durationMilliseconds: duration });
 }
 function documentedStatuses(responses: JsonObject): string { return Object.keys(responses).slice(0, 20).join(', ') || 'none'; }
-function escapePointer(value: string): string { return value.replaceAll('~', '~0').replaceAll('/', '~1'); }

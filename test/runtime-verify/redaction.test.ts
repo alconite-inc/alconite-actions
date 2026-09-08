@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runtimeSummary } from '../../src/runtime-verify/github-summary';
-import { redactSecrets, sha256, stableJson } from '../../src/runtime-verify/redaction';
+import { redactFindingDetails, redactSecrets, sha256, stableJson } from '../../src/runtime-verify/redaction';
 import { createRunnerResult, type RuntimeVerifyReport } from '../../src/runtime-verify/report';
 
 const secrets = ['Bearer super-secret', 'api-key-value', 'session-cookie-value', 'alc_cg_plaintext_example'];
@@ -11,6 +11,23 @@ test('redacts every registered secret from bounded diagnostic text', () => {
   const redacted = redactSecrets(raw, secrets);
   for (const secret of secrets) assert.doesNotMatch(redacted, new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.equal(redacted, '*** :: *** :: *** :: ***');
+});
+
+test('redacts finding evidence while preserving operation identities and typed fields', () => {
+  const result = redactFindingDetails({ operationId: 'getHealth', method: 'GET', pathTemplate: '/health',
+    classification: 'failure', ruleId: 'runtime.response.type-mismatch', durationMilliseconds: 7,
+    summary: 'target-secret in text', explanation: 'project-secret in text', guidance: 'safe guidance',
+    location: '#/properties/target-secret/type', expected: 'integer', actual: 'project-secret'
+  }, ['target-secret', 'project-secret', 'getHealth', 'GET', 'failure']);
+  assert.equal(result.operationId, 'getHealth');
+  assert.equal(result.method, 'GET');
+  assert.equal(result.classification, 'failure');
+  assert.equal(result.ruleId, 'runtime.response.type-mismatch');
+  assert.equal(result.durationMilliseconds, 7);
+  assert.equal(result.location, '#/properties/***/type');
+  assert.equal(result.actual, '***');
+  assert.equal(JSON.stringify(result).includes('target-secret'), false);
+  assert.equal(JSON.stringify(result).includes('project-secret'), false);
 });
 
 test('canonical result digests are deterministic and exclude unsubmitted target material', () => {

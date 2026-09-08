@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { RuntimeFinding } from './findings';
 
 const MAX_SAFE_TEXT = 1_200;
 
@@ -44,4 +45,20 @@ export function redactSecrets(value: string, secrets: readonly string[]): string
     if (secret) result = result.replaceAll(secret, '***');
   }
   return result;
+}
+
+/** Redact evidence text before fingerprints/digests are computed; retain typed identities and enums. */
+export function redactFindingDetails(
+  value: Omit<RuntimeFinding, 'fingerprint'>,
+  secrets: readonly string[]
+): Omit<RuntimeFinding, 'fingerprint'> {
+  return {
+    ...value,
+    summary: redactSecrets(value.summary, secrets),
+    explanation: redactSecrets(value.explanation, secrets),
+    guidance: redactSecrets(value.guidance, secrets),
+    ...(value.location === undefined ? {} : { location: redactSecrets(value.location, secrets) }),
+    ...(value.expected === undefined ? {} : { expected: redactSecrets(value.expected, secrets) }),
+    ...(value.actual === undefined ? {} : { actual: redactSecrets(value.actual, secrets) })
+  };
 }

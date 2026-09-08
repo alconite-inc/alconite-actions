@@ -15,6 +15,14 @@ All notable changes to this project are documented in this file.
 
 - Withhold private Java and Node dependency tokens on every pull request event, including same-repository pull requests.
 - Update the locked transitive `fast-uri` dependency to a patched version and regenerate bundles to clear the required High-severity dependency audit.
+- Reject Runtime Verify operation paths that escape the configured target origin before any request or target credential can be sent.
+- Update Swagger Parser, its reference resolver, and `ignore` to their security fixes; regenerate the Impact bundle to remove the flagged broad character ranges.
+
+### Security maintenance
+
+- Update reviewed Docker Buildx/QEMU, CodeQL SARIF upload, pnpm setup, and Rust cache action pins, plus esbuild and Node type definitions.
+- Refresh the pinned Sentinel runtime image and add weekly Docker base-image updates to Dependabot.
+- Pin reusable-workflow component calls to a verified commit with validation that released Action content matches the pinned content.
 
 ### Documentation
 

@@ -94,6 +94,37 @@ test('rejects cross-origin redirects before forwarding secret headers', async t 
   assert.equal(forwarded, false);
 });
 
+test('rejects initial origin escapes before fetching or forwarding target credentials', async t => {
+  const requests: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: URL | string) => {
+    requests.push(String(url));
+    return new Response('{"status":"healthy"}', { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+  for (const requestPath of [
+    '//attacker.example/collect', '/\\attacker.example/collect', '/\t/attacker.example/collect',
+    '/\n/attacker.example/collect', 'https://attacker.example/collect', '//user:password@attacker.example/collect'
+  ]) {
+    await assert.rejects(
+      executePlan(contract, [plan('GET', requestPath)], new URL('https://trusted.example'), defaults),
+      { code: 'operation_plan_invalid' },
+      `Expected to reject ${JSON.stringify(requestPath)}`
+    );
+  }
+  assert.deepEqual(requests, []);
+});
+
+test('preserves encoded path and query values when binding the initial target origin', async t => {
+  const requests: Array<{ url: string; authorization: string | undefined }> = [];
+  t.mock.method(globalThis, 'fetch', async (url: URL | string, options: RequestInit) => {
+    requests.push({ url: String(url), authorization: (options.headers as Record<string, string>).Authorization });
+    return new Response('{"status":"healthy"}', { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+  const requestPath = '/customers/a%2Fb%5Cc?next=https%3A%2F%2Fother.example%2F&search=one+two';
+  const result = await executePlan(contract, [plan('GET', requestPath)], new URL('https://trusted.example:8443'), defaults);
+  assert.deepEqual(requests, [{ url: `https://trusted.example:8443${requestPath}`, authorization: 'Bearer super-secret' }]);
+  assert.equal(result.observations[0]?.outcome, 'passed');
+});
+
 test('does not follow redirects by default', async t => {
   const baseUrl = await server(t, (_request, reply) => { reply.writeHead(302, { location: '/final' }); reply.end(); });
   const result = await executePlan(contract, [plan()], baseUrl, defaults);

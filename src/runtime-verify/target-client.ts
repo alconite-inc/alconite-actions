@@ -1,4 +1,5 @@
 import type { RuntimeDefaults } from './configuration';
+import { RuntimeVerifyError } from './errors';
 import { RUNTIME_VERIFY_USER_AGENT } from '../release';
 import type { RuntimeFinding } from './findings';
 import { finding } from './findings';
@@ -46,13 +47,14 @@ async function executeOperation(
   defaults: RuntimeDefaults,
   totalSignal?: AbortSignal
 ): Promise<{ observation: RuntimeObservation; findings: RuntimeFinding[] }> {
+  // Resolve and validate before constructing any request with configured credentials.
+  let current = initialTargetUrl(plan.requestPath, baseUrl);
   const started = performance.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), defaults.timeoutSeconds * 1_000);
   const abortFromTotal = () => controller.abort();
   totalSignal?.addEventListener('abort', abortFromTotal, { once: true });
   let response: Response | undefined;
-  let current = new URL(plan.requestPath, baseUrl);
   try {
     for (let redirect = 0; redirect <= 3; redirect += 1) {
       response = await fetch(current, {
@@ -116,6 +118,19 @@ async function executeOperation(
     clearTimeout(timeout);
     totalSignal?.removeEventListener('abort', abortFromTotal);
   }
+}
+
+function initialTargetUrl(requestPath: string, baseUrl: URL): URL {
+  const invalidTarget = () => new RuntimeVerifyError('operation_plan_invalid',
+    'The configured operation target must be an origin-relative path within the selected base-url origin.');
+  // WHATWG URLs treat leading // and backslashes as authorities and discard some controls.
+  if (!requestPath.startsWith('/') || requestPath.startsWith('//') || /[\\\u0000-\u001f\u007f]/u.test(requestPath)) {
+    throw invalidTarget();
+  }
+  let target: URL;
+  try { target = new URL(requestPath, baseUrl); } catch { throw invalidTarget(); }
+  if (target.origin !== baseUrl.origin || target.username || target.password) throw invalidTarget();
+  return target;
 }
 
 async function readBoundedBody(response: Response, maximum: number): Promise<{ body: Buffer; size: number; exceeded: boolean }> {

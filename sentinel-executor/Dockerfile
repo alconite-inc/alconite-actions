@@ -12,7 +12,7 @@ COPY sentinel-executor ./sentinel-executor
 RUN npm run build \
     && install -d -m 0755 -o 65532 -g 65532 /image-root/workspace /image-root/reports
 
-FROM cgr.dev/chainguard/glibc-dynamic:latest@sha256:d0046044cd28948d3380eb0d98709dc7e63f98161fe7105135e1025650bad17a
+FROM cgr.dev/chainguard/glibc-dynamic:latest@sha256:d49aa7837ef1ef8fae33917f94369294c6d49940d2f0b225beee65a3bb6747ed
 
 ARG IMAGE_VERSION=2.5.0
 ARG IMAGE_REVISION=unknown

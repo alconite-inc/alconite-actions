@@ -40,6 +40,7 @@ Choose the smallest integration that matches your repository. These docs prepare
 - [Helper catalog](docs/helpers/README.md): complete input/output references and examples for every build, publishing, and notification helper.
 - [Stack CI reference](docs/stack-ci.md): automatic detection, every input and secret, publishing, and limitations.
 - [Troubleshooting](docs/troubleshooting.md): failed gates, missing credentials, build errors, reports, and enterprise environments.
+- [Security maintenance](docs/security-maintenance.md): alert remediations, dependency updates, and remaining upstream findings.
 - [Support](SUPPORT.md), [security](SECURITY.md), [changelog](CHANGELOG.md), and [contributing](CONTRIBUTING.md).
 
 | Entry point | Purpose | Reference |
