@@ -60,6 +60,10 @@ jobs:
       - run: npm run verify
       - name: Require reproducible checked-in build
         run: git diff --exit-code -- dist runtime-verify/dist impact/dist sentinel-executor/dist
+      - name: Generate version and SHA usage references
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/generate-release-pins.mjs
       - name: Attest Contract Guard JavaScript build
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
@@ -72,7 +76,7 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: impact/dist/**
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Build reviewed linux/amd64 Sentinel image
         shell: bash
         env:
@@ -179,5 +183,9 @@ jobs:
           SENTINEL_NAME: ${{ steps.sentinel.outputs.subject-name }}
           SENTINEL_DIGEST: ${{ steps.sentinel.outputs.subject-digest }}
         run: |
+          set -euo pipefail
+          node scripts/generate-release-notes.mjs
           gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "$RELEASE_TAG" \
-            --notes "Sentinel image: \`$SENTINEL_NAME@$SENTINEL_DIGEST\`"
+            --notes-file build/release/release-notes.md \
+            build/release/release-pins.md build/release/release-pins.json \
+            build/release/release-notes.md sentinel-executor.spdx.json

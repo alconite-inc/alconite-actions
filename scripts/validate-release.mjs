@@ -4,12 +4,15 @@ import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { parse } from 'yaml';
 import { validateChangelog, validateSelfReferences } from './release-policy.mjs';
+import { validateComponentPin } from './component-pin.mjs';
+import { validateReleaseNotes } from './generate-release-notes.mjs';
 
 const execFileAsync = promisify(execFile);
 const packageManifest = JSON.parse(await readFile('package.json', 'utf8'));
 const packageLock = JSON.parse(await readFile('package-lock.json', 'utf8'));
 const releaseVersion = packageManifest.version;
 const releaseTag = `v${releaseVersion}`;
+const componentPin = await validateComponentPin();
 const uploadArtifact = 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1';
 const attest = 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4';
 const uploadArtifactMarker = ['actions/upload', 'artifact@'].join('-');
@@ -46,6 +49,7 @@ const forbiddenTokens = [
 const pendingHeading = ['Un', 'released'].join('');
 const pendingWord = new RegExp(`\\b${pendingHeading}\\b`, 'iu');
 validateChangelog(await readFile(historicalVersionFile, 'utf8'), releaseVersion);
+validateReleaseNotes(await readFile(`docs/releases/${releaseTag}.md`, 'utf8'), releaseTag);
 
 for (const filename of trackedFiles) {
   const bytes = await readFile(filename);
@@ -57,7 +61,7 @@ for (const filename of trackedFiles) {
     }
     assert.equal(pendingWord.test(source), false, `${filename} contains a pending-release marker`);
   }
-  validateSelfReferences(filename, source, releaseTag);
+  validateSelfReferences(filename, source, releaseTag, componentPin.commit);
 
   for (const line of source.split(/\r?\n/u)) {
     if (line.includes(uploadArtifactMarker)) {
@@ -116,6 +120,18 @@ for (const [name, subjectPath] of expectedSubjects) {
 }
 const publish = steps.find((step) => step.name === 'Create GitHub release');
 assert.ok(publish?.run?.includes('--verify-tag'), 'release creation must verify the immutable tag');
+assert.ok(publish?.run?.includes('--notes-file build/release/release-notes.md'), 'release notes must include generated SHA references');
+assert.ok(publish?.run?.includes('node scripts/generate-release-notes.mjs'), 'release notes must combine the curated changes with verified tag references and image digest');
+assert.equal(publish?.env?.RELEASE_TAG, '${{ github.ref_name }}');
+assert.equal(publish?.env?.SENTINEL_NAME, '${{ steps.sentinel.outputs.subject-name }}');
+assert.equal(publish?.env?.SENTINEL_DIGEST, '${{ steps.sentinel.outputs.subject-digest }}');
+for (const asset of ['release-pins.md', 'release-pins.json', 'release-notes.md']) {
+  assert.ok(publish?.run?.includes(`build/release/${asset}`), `release must attach ${asset}`);
+}
+assert.ok(publish?.run?.includes('sentinel-executor.spdx.json'), 'release must attach the tested image SBOM');
+const pinsStep = steps.find((step) => step.name === 'Generate version and SHA usage references');
+assert.equal(pinsStep?.env?.RELEASE_TAG, '${{ github.ref_name }}');
+assert.equal(pinsStep?.run, 'node scripts/generate-release-pins.mjs');
 
 const readme = await readFile('README.md', 'utf8');
 assert.match(readme, /Linux GitHub runner/u, 'Impact documentation must state its Linux runner requirement');

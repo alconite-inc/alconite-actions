@@ -53,6 +53,34 @@ test('reports content-type mismatch', () => {
   assert.equal(validate(200, 'text/plain', 'hello').findings.at(-1)?.ruleId, 'runtime.response.content-type-mismatch');
 });
 
+test('never copies arbitrary response media types into findings or observations', () => {
+  for (const [method, body] of [['GET', '{"status":"healthy"}'], ['GET', ''], ['HEAD', '']] as const) {
+    const result = validateResponse({ contract, plan: { ...plan(), method }, statusCode: 200,
+      headers: new Headers({ 'content-type': 'application/private-target-secret', 'x-request-id': 'request' }),
+      body: Buffer.from(body), durationMilliseconds: 1 });
+    assert.equal(result.contentType, undefined);
+    assert.equal(JSON.stringify(result).includes('private-target-secret'), false);
+  }
+});
+
+test('schema locations retain documented properties without response-owned map keys', () => {
+  const dictionaryPlan = { ...plan(), operation: { responses: { '200': { description: 'OK', content: {
+    'application/json': { schema: { type: 'object', additionalProperties: {
+      type: 'object', properties: { status: { type: 'integer' } }
+    } } }
+  } } } } };
+  const result = validateResponse({ contract, plan: dictionaryPlan, statusCode: 200,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    body: Buffer.from(JSON.stringify({ 'customer@example.com': { status: 'secret-value' }, 'target-credential': { status: 'another-value' } })),
+    durationMilliseconds: 1 });
+  assert.equal(result.findings.length, 1);
+  assert.match(result.findings[0]?.location ?? '', /additionalProperties\/properties\/status\/type$/);
+  assert.equal(result.findings[0]?.ruleId, 'runtime.response.type-mismatch');
+  for (const privateValue of ['customer@example.com', 'target-credential', 'secret-value', 'another-value']) {
+    assert.equal(JSON.stringify(result).includes(privateValue), false);
+  }
+});
+
 test('reports invalid JSON without body contents', () => {
   const result = validate(200, 'application/json', '{secret');
   assert.equal(result.findings.at(-1)?.ruleId, 'runtime.response.invalid-json');

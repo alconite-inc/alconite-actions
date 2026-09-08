@@ -38,7 +38,7 @@ const payload = {
 
 const response = await fetch(url, {
   method: 'POST',
-  headers: { 'content-type': 'application/json', 'user-agent': 'alconite-actions/2.4.1' },
+  headers: { 'content-type': 'application/json', 'user-agent': 'alconite-actions/2.5.0' },
   body: JSON.stringify(payload),
   redirect: 'manual',
   signal: AbortSignal.timeout(15_000),

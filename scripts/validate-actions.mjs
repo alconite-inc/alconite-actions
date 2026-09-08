@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
+import { validateComponentPin } from './component-pin.mjs';
+import { selfReferencePrefix } from './release-policy.mjs';
 
 const actionFiles = [
   'action.yml',
@@ -15,9 +17,7 @@ const actionFiles = [
   'impact/action.yml',
 ];
 const immutableAction = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*@[a-f0-9]{40}$/u;
-const packageManifest = JSON.parse(await fs.readFile('package.json', 'utf8'));
-assert.equal(typeof packageManifest.version, 'string', 'package.json must declare a version');
-const currentSelfRelease = `v${packageManifest.version}`;
+const componentPin = await validateComponentPin();
 
 for (const filename of actionFiles) {
   const source = await fs.readFile(filename, 'utf8');
@@ -121,7 +121,6 @@ for (const filename of ['examples/runtime-verify-deployment.yml', 'examples/runt
 const workflowFiles = (await fs.readdir('.github/workflows'))
   .filter((filename) => filename.endsWith('.yml') || filename.endsWith('.yaml'))
   .map((filename) => path.join('.github/workflows', filename));
-const selfRelease = /^alconite-inc\/alconite-actions(?:\/[A-Za-z0-9_.-]+)*@(v[0-9]+\.[0-9]+\.[0-9]+)$/u;
 for (const filename of workflowFiles) {
   const workflow = parse(await fs.readFile(filename, 'utf8'));
   for (const [jobName, job] of Object.entries(workflow.jobs || {})) {
@@ -129,11 +128,10 @@ for (const filename of workflowFiles) {
     for (const uses of usesValues) {
       if (uses.startsWith('./') || uses.startsWith('docker://')) continue;
       const normalized = uses.replace(/\s+#.*$/u, '');
-      const selfVersion = selfRelease.exec(normalized)?.[1];
-      assert.ok(
-        immutableAction.test(normalized) || selfVersion === currentSelfRelease,
-        `${filename} job ${jobName} must use an immutable SHA or the current ${currentSelfRelease} self release`,
-      );
+      assert.match(normalized, immutableAction, `${filename} job ${jobName} must use a full immutable SHA`);
+      if (normalized.startsWith(`${selfReferencePrefix}@`) || normalized.startsWith(`${selfReferencePrefix}/`)) {
+        assert.equal(normalized.split('@')[1], componentPin.commit, `${filename} job ${jobName} must use the verified component commit`);
+      }
     }
   }
 }

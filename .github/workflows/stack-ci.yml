@@ -28,7 +28,7 @@ on:
         type: string
         default: auto
       docker-push:
-        description: Publish and attest the Docker image on a trusted non-PR ref.
+        description: Publish the Docker image with BuildKit SBOM and provenance on a trusted non-PR ref. GitHub artifact attestation is not required.
         type: boolean
         default: false
       docker-image:
@@ -131,10 +131,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: alconite-inc/alconite-actions/java-ci@v2.4.1
+      - uses: alconite-inc/alconite-actions/java-ci@02478f85802a221e754abc231c3c947ae27b4dc4 # v2.5.0
         with:
           java-version: ${{ inputs.java-version }}
-          packages-token: ${{ github.event_name == 'pull_request' && '' || secrets.packages-token }}
+          packages-token: ${{ github.event_name != 'pull_request' && secrets.packages-token || '' }}
 
   node:
     name: Node CI
@@ -148,10 +148,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: alconite-inc/alconite-actions/node-ci@v2.4.1
+      - uses: alconite-inc/alconite-actions/node-ci@02478f85802a221e754abc231c3c947ae27b4dc4 # v2.5.0
         with:
           node-version: ${{ inputs.node-version }}
-          packages-token: ${{ github.event_name == 'pull_request' && '' || secrets.packages-token }}
+          packages-token: ${{ github.event_name != 'pull_request' && secrets.packages-token || '' }}
 
   rust:
     name: Rust CI
@@ -164,7 +164,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: alconite-inc/alconite-actions/rust-ci@v2.4.1
+      - uses: alconite-inc/alconite-actions/rust-ci@02478f85802a221e754abc231c3c947ae27b4dc4 # v2.5.0
 
   docker-build:
     name: Docker build
@@ -177,7 +177,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: alconite-inc/alconite-actions/docker-ci@v2.4.1
+      - uses: alconite-inc/alconite-actions/docker-ci@02478f85802a221e754abc231c3c947ae27b4dc4 # v2.5.0
         with:
           image: ${{ inputs.docker-image }}
           push: "false"
@@ -198,7 +198,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: alconite-inc/alconite-actions@v2.4.1
+      - uses: alconite-inc/alconite-actions@02478f85802a221e754abc231c3c947ae27b4dc4 # v2.5.0
         with:
           project-id: ${{ inputs.contract-guard-project-id }}
           project-token: ${{ secrets.contract-guard-token }}
@@ -219,27 +219,19 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Build and publish image
         id: image
-        uses: alconite-inc/alconite-actions/docker-ci@v2.4.1
+        uses: alconite-inc/alconite-actions/docker-ci@02478f85802a221e754abc231c3c947ae27b4dc4 # v2.5.0
         with:
           image: ${{ inputs.docker-image }}
           push: "true"
           registry-password: ${{ secrets.registry-password || github.token }}
           sbom: "true"
           provenance: mode=max
-      - name: Attest published image
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
-        with:
-          subject-name: ${{ steps.image.outputs.image }}
-          subject-digest: ${{ steps.image.outputs.digest }}
-          push-to-registry: true
 
   notify:
     name: Notify
@@ -250,7 +242,7 @@ jobs:
     env:
       DISCORD_WEBHOOK: ${{ secrets.discord-webhook }}
     steps:
-      - uses: alconite-inc/alconite-actions/discord-notify@v2.4.1
+      - uses: alconite-inc/alconite-actions/discord-notify@02478f85802a221e754abc231c3c947ae27b4dc4 # v2.5.0
         if: ${{ env.DISCORD_WEBHOOK != '' }}
         with:
           webhook-url: ${{ env.DISCORD_WEBHOOK }}

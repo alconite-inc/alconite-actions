@@ -19,7 +19,7 @@ function isOlderV2Tag(ref, currentTag) {
     || (refVersion[0] === currentVersion[0] && refVersion[1] < currentVersion[1]);
 }
 
-export function validateSelfReferences(filename, source, currentTag) {
+export function validateSelfReferences(filename, source, currentTag, componentCommit) {
   const reference = new RegExp(
     `${escapePattern(selfReferencePrefix)}[^\\s"'\\x60@]*@([^\\s"'\\x60]+)`,
     'giu',
@@ -29,7 +29,8 @@ export function validateSelfReferences(filename, source, currentTag) {
       const ref = match[1];
       const historicalLine = filename === 'CHANGELOG.md'
         && line.startsWith('- Historical compatibility: ');
-      const allowed = historicalLine ? isOlderV2Tag(ref, currentTag) : ref === currentTag;
+      const pinnedComponent = /^[a-f0-9]{40}$/u.test(componentCommit ?? '') && ref === componentCommit;
+      const allowed = historicalLine ? isOlderV2Tag(ref, currentTag) : ref === currentTag || pinnedComponent;
       assert.ok(
         allowed,
         `${filename}:${index + 1} contains non-current self-reference ${match[0]}`,
