@@ -184,8 +184,8 @@ jobs:
           SENTINEL_DIGEST: ${{ steps.sentinel.outputs.subject-digest }}
         run: |
           set -euo pipefail
-          cp build/release/release-pins.md build/release/release-notes.md
-          printf '\nSentinel image: `%s@%s`\n' "$SENTINEL_NAME" "$SENTINEL_DIGEST" >> build/release/release-notes.md
+          node scripts/generate-release-notes.mjs
           gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "$RELEASE_TAG" \
             --notes-file build/release/release-notes.md \
-            build/release/release-pins.md build/release/release-pins.json
+            build/release/release-pins.md build/release/release-pins.json \
+            build/release/release-notes.md sentinel-executor.spdx.json
