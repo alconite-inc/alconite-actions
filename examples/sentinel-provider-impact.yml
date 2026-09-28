@@ -1,0 +1,46 @@
+name: Provider impact against gateway change
+on:
+  workflow_dispatch:
+    inputs:
+      gateway_check_id:
+        description: Completed retained gateway check ID
+        required: true
+        type: string
+      provider_commit:
+        description: Full provider commit SHA to analyze
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  impact:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require an immutable source revision
+        env:
+          PROVIDER_COMMIT: ${{ inputs.provider_commit }}
+        shell: bash
+        run: |
+          [[ "$PROVIDER_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.provider_commit }}
+          persist-credentials: false
+      - id: impact
+        uses: alconite-inc/alconite-actions/impact@d7600531a8e7eb6de79b8aa2e17014d768d538ce # v2.5.0
+        with:
+          project-id: ${{ vars.ALCONITE_PROJECT_ID }}
+          project-token: ${{ secrets.ALCONITE_IMPACT_TOKEN }}
+          check-id: ${{ inputs.gateway_check_id }}
+          source-root: src
+          fail-on-risk: high
+          fail-on-potential-risk: never
+      - name: Preserve source-impact report
+        if: ${{ !cancelled() && steps.impact.outputs.report-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-impact
+          path: ${{ steps.impact.outputs.report-path }}
+          retention-days: 7
+          if-no-files-found: error

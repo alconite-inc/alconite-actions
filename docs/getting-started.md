@@ -36,6 +36,12 @@ Commit the files needed by the selected component:
 
 The direct Actions operate on the current checkout. Add `actions/checkout` first, using `persist-credentials: false` unless another step explicitly requires persisted Git authentication. Relative paths resolve from the workspace or the helper's documented `working-directory`; a `defaults.run.working-directory` setting does not configure an Action's inputs. For a monorepo, pass the component's path input explicitly.
 
+## Establish the approved baseline
+
+Open [Sentinel contracts](https://alconite.com/platform/sentinel/contracts) in the intended workspace and create a project. Upload the currently published OpenAPI document, or import its exact revision through the [GitHub App](https://alconite.com/platform/documentation/contract-guard/github-repository-onboarding). Review the version, then explicitly approve it as the initial baseline. Import alone does not approve a baseline, and the Action does not create one automatically.
+
+Run an unchanged candidate first, then a deliberately breaking revision in a test project. This confirms both onboarding and enforcement. For gateway/provider ownership, monorepos, cross-repository checks, and deployment verification, use [Sentinel production workflows](../SENTINEL-WORKFLOW.md).
+
 ## Create the Alconite credentials
 
 In the Alconite project, create a scoped project token. Store non-secret identifiers as GitHub repository variables and tokens as repository or protected environment secrets. The examples use the following names; the Action only cares about the values passed to its inputs.
@@ -86,7 +92,7 @@ jobs:
 
       - name: Analyze impact on source
         id: impact
-        if: steps.guard.outcome == 'success'
+        if: ${{ !cancelled() && steps.guard.outputs.check-id != '' }}
         uses: alconite-inc/alconite-actions/impact@v2.5.0
         with:
           project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
@@ -114,7 +120,7 @@ jobs:
           retention-days: 7
 ```
 
-Run this on a trusted branch, then open the Actions run's summary and report artifacts. Contract Guard fails the job if the platform gate is `failed`; Impact initially reports risk without failing the job. Choose `low`, `medium`, `high`, or `critical` thresholds when your team is ready to enforce source-evidenced and/or potential risk. A completed failed gate is a usable report, while authentication or input failures may produce no report.
+Run this on a trusted branch, then open the Actions run's summary and report artifacts. Contract Guard fails the job if the platform gate is `failed`; Impact initially reports risk without failing the job. Choose `low`, `medium`, `high`, or `critical` thresholds when your team is ready to enforce source-evidenced and/or potential risk. Impact runs for any completed Guard check, including a rejected candidate, while the failed Guard step still fails the job. Authentication or input failures without a check ID do not run Impact. No `continue-on-error` is needed.
 
 Impact uploads selected source to Alconite for ephemeral analysis. The platform does not persist that source or the Impact report. The optional GitHub artifact uploads above retain the canonical reports under your repository's access and retention settings; choose retention appropriate for your organization. Do not attach those reports to public issues.
 

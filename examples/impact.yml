@@ -23,7 +23,7 @@ jobs:
           candidate-path: openapi/openapi.yaml
       - name: Alconite Impact
         id: impact
-        if: steps.contract_guard.outcome == 'success'
+        if: ${{ !cancelled() && steps.contract_guard.outputs.check-id != '' }}
         uses: alconite-inc/alconite-actions/impact@v2.5.0
         with:
           project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
