@@ -44,6 +44,15 @@ Run an unchanged candidate first, then a deliberately breaking revision in a tes
 
 ## Create the Alconite credentials
 
+On platforms with approved contract automation enabled, **Create workflow PR**
+can propose the first workflow after GitHub discovery and baseline approval.
+Its combined credential is named `ALCONITE_PROJECT_TOKEN`; add it once with
+`versions:write`, `checks:write`, and `impact:write`, review the draft, and require
+the Sentinel job. This optional path needs GitHub App permission approval and a
+platform rollout, not an Actions upgrade. See
+[platform-managed onboarding](../SENTINEL-WORKFLOW.md#optional-platform-managed-onboarding).
+The manual, separate-token workflow below remains supported.
+
 In the Alconite project, create a scoped project token. Store non-secret identifiers as GitHub repository variables and tokens as repository or protected environment secrets. The examples use the following names; the Action only cares about the values passed to its inputs.
 
 | GitHub setting | Used by | Value |

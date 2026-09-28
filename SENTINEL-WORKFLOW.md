@@ -14,6 +14,40 @@ produces an empty-delta Impact result. Deploy that fix before using the unchange
 candidate acceptance test below. No new Action input or bundle is needed. This
 guide does not assert that the fix is already running on the hosted platform.
 
+## Optional platform-managed onboarding
+
+The accompanying platform implementation adds opt-in draft workflow PRs and
+selected approved-contract reference updates. It requires a separate platform
+rollout and GitHub App permission approval; installing Actions v2.5.0 alone does
+not enable it.
+
+Connect a repository, discover/import its OpenAPI document, approve the baseline,
+and choose **Create workflow PR** when the platform exposes that control. The
+generated workflow uses these released Guard and Impact actions. Add one project
+token with `versions:write`, `checks:write`, and `impact:write` as the repository
+secret `ALCONITE_PROJECT_TOKEN`, then review the PR and require the Sentinel job.
+The App does not install secrets or configure branch protection.
+
+On a dependent project, **Add dependency** previews selected upstream tags,
+exact paths, or operation IDs before saving the approved selection. Subsequent
+upstream baseline approvals can propose only two managed files:
+`.alconite/contracts/<name>.openapi.json` and `<name>.lock.json`. Ordinary checks
+do not publish. Unrelated selected-content changes produce no update, closed
+same-content PRs are respected, and no PR is auto-merged or branch force-pushed.
+
+App delivery needs Contents write and Pull requests write on the selected
+repository; workflow proposals additionally need Workflows write. These are
+server-side App permissions, not permissions to add to the read-only CI job.
+Public exports require explicit consent. See the rollout-gated
+[platform automation guide](https://alconite.com/platform/documentation/github-actions/contract-publication-automation)
+for operational limits and recovery.
+
+Reference migration acknowledgement is not provider conformance. The generated
+Guard/Impact steps still compare the dependent application's own contract, not
+an implicit cross-project parent check. Keep provider integration tests required
+and use the explicit comparison workflows below where upstream source-impact
+evidence is needed.
+
 ## What each gate can establish
 
 | Question | Capability | Public integration |
@@ -59,8 +93,9 @@ Provider integration tests + gateway integration tests
 
 Use one Sentinel project for the gateway's evolving public contract. Use separate
 projects when providers publish independently versioned internal contracts.
-There is no automatic parent/child project relationship or gateway route ownership
-model in Sentinel.
+The public Actions do not create project relationships or infer gateway route
+ownership. Optional platform automation can save explicit selected-surface
+dependencies, as described above.
 
 Do not compare the entire gateway baseline with a customers-only candidate and
 interpret removed orders routes as a provider failure. Guard compares whole API
@@ -70,9 +105,10 @@ For contract-first providers, pin the gateway contract revision used by provider
 tests. For independently described providers, define and version the owned
 contract surface and any route/schema transformations in your build. A parent
 projection must preserve required references and request/response direction.
-Treat projection and gateway composition as explicit customer tooling, not a
-Sentinel feature. Internal paths and response envelopes may legitimately differ
-from the public gateway.
+The platform's opt-in bounded projection supports selected operations and local
+components. Gateway composition and route/schema transformations remain customer
+tooling. Internal paths and response envelopes may legitimately differ from the
+public gateway.
 
 A source-impact finding can identify affected implementation code or consumers.
 It does not distinguish a correct implementation from an incorrect one merely
@@ -409,7 +445,8 @@ endpoint.
 | Verify explicit deployed GET/HEAD scenarios | Runtime Verify Action |
 | Create project, import/publish a standalone version, promote baseline, change policy, mint token | Platform management workflow, not public Action inputs |
 | Arbitrary two-file offline diff or local source conformance | Not provided by these Actions |
-| Parent specification ownership, provider discovery, automatic fan-out | Not provided |
+| Explicit selected-surface subscriptions and approved reference-update PRs | Optional platform automation; not public Action inputs |
+| Inferred parent ownership, provider discovery, implementation conformance | Not provided |
 | Run source, resolve application dependencies, compile provider implementation | Customer build/test jobs |
 | Persist Impact source/report history on Alconite | Not provided; analysis is ephemeral |
 | Persist reports in customer CI | Explicit artifact step; customer access/retention policy |
