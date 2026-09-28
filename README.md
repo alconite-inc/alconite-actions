@@ -37,6 +37,7 @@ In a pull request, Alconite checks whether the proposed contract is safe and map
 Choose the smallest integration that matches your repository. These docs prepare **v2.5.0**, shared by all nine Actions and both reusable workflows; publish the release before adopting its examples. See [versioning and verified SHA pins](docs/versioning.md) for release availability, the exact commit, and the difference between Action commit pins and container digests.
 
 - [Getting started](docs/getting-started.md): prerequisites, a complete first workflow, credentials, permissions, and trusted events.
+- [Sentinel production workflows](SENTINEL-WORKFLOW.md): gateway/provider boundaries, monorepos, separate repositories, release gates, and runtime verification.
 - [Helper catalog](docs/helpers/README.md): complete input/output references and examples for every build, publishing, and notification helper.
 - [Stack CI reference](docs/stack-ci.md): automatic detection, every input and secret, publishing, and limitations.
 - [Troubleshooting](docs/troubleshooting.md): failed gates, missing credentials, build errors, reports, and enterprise environments.
@@ -64,7 +65,7 @@ The stack workflow publishes without requiring GitHub artifact attestations. Its
 
 ## Contract Guard quick start
 
-Create a project token from the Contract Guard project screen and store it as the `ALCONITE_CONTRACT_GUARD_TOKEN` repository secret.
+Create a project in [Sentinel contracts](https://alconite.com/platform/sentinel/contracts), upload or import the currently published OpenAPI contract, and explicitly approve its initial baseline. Then create a project token with `versions:write` and `checks:write` and store it as the `ALCONITE_CONTRACT_GUARD_TOKEN` repository secret. Importing a contract does not approve it, and this Action does not create a baseline automatically. See [getting started](docs/getting-started.md).
 
 ```yaml
 name: Contract Guard
@@ -189,7 +190,7 @@ Impact chains to the root Action's emitted `check-id`; it does not upload contra
 
 - name: Alconite Impact
   id: impact
-  if: steps.contract_guard.outcome == 'success'
+  if: ${{ !cancelled() && steps.contract_guard.outputs.check-id != '' }}
   uses: alconite-inc/alconite-actions/impact@v2.5.0
   with:
     project-id: ${{ vars.ALCONITE_CONTRACT_GUARD_PROJECT_ID }}
@@ -204,7 +205,7 @@ Impact chains to the root Action's emitted `check-id`; it does not upload contra
     path: ${{ steps.impact.outputs.report-path }}
 ```
 
-An Impact-only workflow for an existing completed check needs `impact:write`. The chained workflow above needs exactly `versions:write`, `checks:write`, and `impact:write`; it does not need `checks:read`. The recommended PR flow runs Impact after a successful Guard step. Advanced workflows may use `always() && steps.contract_guard.outputs.check-id != ''` to preserve analysis after a completed failed gate; that condition does not clear the failed Contract Guard step or job.
+An Impact-only workflow for an existing completed check needs `impact:write`. The chained workflow above needs exactly `versions:write`, `checks:write`, and `impact:write`; it does not need `checks:read`. Impact runs after any completed Guard check, including a rejected candidate. The explicit status condition preserves analysis after a failed gate without clearing the failed Guard step or job; a processing failure without a check ID does not run Impact. Impact detects source references to contract changes, not full provider conformance to a parent specification. See [Sentinel production workflows](SENTINEL-WORKFLOW.md).
 
 Both steps require a project token. Ordinary GitHub secrets are unavailable to fork pull requests, so keep the repository-identity restriction shown in [examples/impact.yml](examples/impact.yml) and never expose protected tokens to untrusted fork code.
 

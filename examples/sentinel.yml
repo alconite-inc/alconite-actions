@@ -1,0 +1,56 @@
+name: Sentinel contract and impact
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  sentinel:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the candidate
+        id: guard
+        uses: alconite-inc/alconite-actions@d7600531a8e7eb6de79b8aa2e17014d768d538ce # v2.5.0
+        with:
+          project-id: ${{ vars.ALCONITE_PROJECT_ID }}
+          project-token: ${{ secrets.ALCONITE_CONTRACT_TOKEN }}
+          candidate-path: openapi.yaml
+          fail-on: failed
+      - name: Analyze every completed check, including rejected candidates
+        id: impact
+        if: ${{ !cancelled() && steps.guard.outputs.check-id != '' }}
+        uses: alconite-inc/alconite-actions/impact@d7600531a8e7eb6de79b8aa2e17014d768d538ce # v2.5.0
+        with:
+          project-id: ${{ vars.ALCONITE_PROJECT_ID }}
+          project-token: ${{ secrets.ALCONITE_IMPACT_TOKEN }}
+          check-id: ${{ steps.guard.outputs.check-id }}
+          source-root: .
+          fail-on-risk: high
+          fail-on-potential-risk: never
+      - name: Require an untruncated impact report
+        if: ${{ !cancelled() && steps.impact.outputs.report-truncated == 'true' }}
+        run: |
+          echo "Impact report was truncated; narrow the source selection and review again." >&2
+          exit 1
+      - name: Preserve Guard report
+        if: ${{ !cancelled() && steps.guard.outputs.report-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sentinel-contract
+          path: ${{ steps.guard.outputs.report-path }}
+          retention-days: 7
+          if-no-files-found: error
+      - name: Preserve Impact report
+        if: ${{ !cancelled() && steps.impact.outputs.report-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sentinel-impact
+          path: ${{ steps.impact.outputs.report-path }}
+          retention-days: 7
+          if-no-files-found: error

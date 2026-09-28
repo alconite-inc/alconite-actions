@@ -104,8 +104,8 @@ assert.ok(contractStep, 'the Impact workflow example must include the root Contr
 assert.ok(impactStep, 'the Impact workflow example must include the additive Impact step');
 assert.equal(
   impactStep.if,
-  "steps.contract_guard.outcome == 'success'",
-  'the recommended Impact example must follow a successful Contract Guard PR check',
+  "${{ !cancelled() && steps.contract_guard.outputs.check-id != '' }}",
+  'the Impact example must analyze completed failed gates without clearing Guard failure',
 );
 assert.equal(
   impactStep.with['check-id'],

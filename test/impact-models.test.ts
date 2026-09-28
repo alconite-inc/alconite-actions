@@ -23,6 +23,25 @@ async function fixture(): Promise<Record<string, unknown>> {
   return JSON.parse(await fs.readFile(path.resolve('test/fixtures/impact-report-v1-single-file.json'), 'utf8')) as Record<string, unknown>;
 }
 
+test('accepts a completed unchanged-contract check with a reused version and no impact', async () => {
+  const raw = await fixture();
+  const contract = raw.contract as Record<string, unknown>;
+  contract.candidateVersionId = contract.baselineVersionId;
+  contract.candidateContentHash = contract.baselineContentHash;
+  contract.candidateOpenapiVersion = contract.baselineOpenapiVersion;
+  Object.assign(raw, {
+    overallRisk: 'NONE', overallPotentialRisk: 'NONE', breakingChanges: 0,
+    affectedFiles: 0, affectedSourceLocations: 0, changes: [],
+  });
+  Object.assign(raw.metadata as Record<string, unknown>, {
+    totalAffectedSourceLocations: 0, returnedAffectedSourceLocations: 0,
+    changesWithoutReturnedLocations: 0,
+  });
+  const report = validateImpactReport(raw, PROJECT_ID, CHECK_ID);
+  assert.equal(report.overallRisk, 'NONE');
+  assert.equal(report.changes.length, 0);
+});
+
 type Classification = 'breaking' | 'risky' | 'non_breaking' | 'informational';
 
 const CATEGORY_BY_KIND: Record<ContractChangeKind, string> = {
