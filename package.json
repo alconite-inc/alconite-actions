@@ -22,7 +22,7 @@
     "verify": "npm run typecheck && npm test && npm run validate:actions && npm run validate:dependencies && npm run validate:sentinel-container && npm run validate:release && npm run build"
   },
   "dependencies": {
-    "@apidevtools/swagger-parser": "13.0.0",
+    "@apidevtools/swagger-parser": "13.1.0",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "ignore": "7.0.8",
